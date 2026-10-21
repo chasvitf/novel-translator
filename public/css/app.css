@@ -169,11 +169,10 @@ mark.miss { background: var(--accent-soft); outline: 1px solid var(--accent); }
 .prov .badge { margin-top: 4px; }
 
 /* runner (progress bar fixed at the bottom) */
-.runner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; width: min(760px, calc(100% - 24px)); background: var(--ink); color: var(--paper); border-radius: 12px; padding: 12px 14px; box-shadow: 0 10px 40px rgb(0 0 0 / .3); z-index: 30; }
-.runner .bar { height: 5px; background: rgb(255 255 255 / .15); border-radius: 3px; overflow: hidden; margin: 8px 0; }
+.runner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; width: min(760px, calc(100% - 24px)); background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; box-shadow: 0 10px 40px rgb(0 0 0 / .45); z-index: 30; }
+.runner .bar { height: 5px; background: var(--soft); border-radius: 3px; overflow: hidden; margin: 8px 0; }
 .runner .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 .runner .log { font-size: .8rem; opacity: .8; max-height: 4.8em; overflow: auto; white-space: pre-wrap; }
-.runner .btn { color: var(--ink); }
 
 .toast { position: fixed; top: 70px; left: 50%; transform: translate(-50%, -20px); background: var(--ink); color: var(--paper); padding: 8px 16px; border-radius: 8px; opacity: 0; pointer-events: none; transition: .2s; z-index: 40; max-width: calc(100% - 32px); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }

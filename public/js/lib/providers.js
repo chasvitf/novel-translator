@@ -17,7 +17,7 @@ export const PROVIDERS = {
     name: "Pollinations (ไม่ต้องมี key)",
     badge: "ฟรี · ไม่ต้องสมัคร · ช้า · คุณภาพต่ำกว่า",
     noKey: true,
-    keyHelp: "ไม่ต้องมี key แต่จำกัด 1 ครั้งต่อ 30 วินาที และสำนวนด้อยกว่า Gemini ชัดเจน (ทดสอบแล้ว: ญี่ปุ่นพอใช้ เวียดนามแปลผิดความหมาย) เหมาะกับลองเล่น ใช้งานจริงแนะนำ Gemini",
+    keyHelp: "ไม่ต้องมี key แต่ช้า (1 ครั้งต่อ 30 วินาที) และสำนวนด้อยกว่า Gemini ใช้งานจริงแนะนำ Gemini",
     endpoint: "https://text.pollinations.ai/openai",
     defaultModel: "openai",
     models: ["openai"],
@@ -318,18 +318,27 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
     }
   }
 
+  // A model that kept answering "overloaded" is passed over for a while, so the next calls don't
+  // spend ~20 seconds retrying it first. When every model is cooling down, they are tried anyway.
+  const cooling = new Map();
+  const OVERLOAD_COOLDOWN_MS = 3 * 60 * 1000;
+
   return async function call(req) {
     const skip = new Set();
     let lastErr = null;
     for (;;) {
-      const model = chain.find((m) => !exhausted.has(keyOf(m)) && !skip.has(m));
+      const usable = (m) => !exhausted.has(keyOf(m)) && !skip.has(m);
+      const model = chain.find((m) => usable(m) && !(cooling.get(m) > Date.now())) || chain.find(usable);
       if (!model) throw lastErr && lastErr.kind !== "quota" ? lastErr : new AIError("quota", ALL_GONE);
       try {
         return { ...(await attempt(model, req)), model };
       } catch (e) {
         if (!(e instanceof AIError) || !["quota", "blocked", "overloaded"].includes(e.kind)) throw e;
         if (e.kind === "quota") exhausted.add(keyOf(model));
-        if (e.kind === "overloaded") e.kind = "network";
+        if (e.kind === "overloaded") {
+          e.kind = "network";
+          cooling.set(model, Date.now() + OVERLOAD_COOLDOWN_MS);
+        }
         skip.add(model);
         lastErr = e;
         const next = chain.find((m) => !exhausted.has(keyOf(m)) && !skip.has(m));

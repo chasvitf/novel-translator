@@ -89,9 +89,15 @@ function save(now = false) {
   saveTimer = setTimeout(run, 400);
 }
 
+// A tab closed mid-run leaves chapters marked "working"; nothing is translating them any more.
+function resetStuck(p) {
+  for (const c of p.chapters) if (c.status === "working" && !busy()) c.status = c.translation ? "done" : "new";
+}
+
 async function openProject(id) {
   state.project = await store.getProject(id);
   if (!state.project) return go("home");
+  resetStuck(state.project);
   store.prefs.set("last", id);
   state.selected = new Set();
   state.chapterId = state.project.chapters[0]?.id || null;
@@ -104,8 +110,16 @@ async function refreshProjects() {
 
 // ---------------- routing / chrome ----------------
 
-function go(view) {
+function go(view, { fromHistory = false } = {}) {
   if (view !== "home" && view !== "ai" && !state.project) view = "home";
+  // Each page gets a history entry so the browser's back button moves between pages.
+  const entry = { view, project: state.project?.id || null, chapter: state.chapterId || null };
+  if (fromHistory) history.replaceState(entry, "", `#${view}`);
+  else {
+    const cur = history.state;
+    if (!cur) history.replaceState(entry, "", `#${view}`);
+    else if (cur.view !== view || cur.project !== entry.project) history.pushState(entry, "", `#${view}`);
+  }
   state.view = view;
   state.editing = false;
   render();
@@ -153,10 +167,13 @@ const GUIDE = [
 ];
 
 function viewHome() {
+  // The open story may have been renamed or translated since the list was loaded.
+  const cur = state.project;
+  if (cur) state.projects = state.projects.map((x) => (x.id === cur.id ? cur : x));
   const list = state.projects.length
     ? `<ul class="projects">${state.projects
         .map(
-          (p) => `<li><div class="grow"><b>${esc(p.name)}</b><div class="muted small">${esc(langByCode(p.srcLang).name)} → ${esc(langByCode(p.tgtLang).name)} · ${p.chapters.length} ตอน · แปลแล้ว ${p.chapters.filter((c) => c.translation).length} · อภิธานศัพท์ ${p.glossary.length} คำ</div></div>
+          (p) => `<li><div class="grow"><b>${esc(p.name)}</b><div class="muted small">${esc(langByCode(p.srcLang).name)} → ${esc(langByCode(p.tgtLang).name)} · ${p.chapters.length} ตอน · แปลแล้ว ${p.chapters.filter((c) => c.translation).length} · จำชื่อไว้ ${p.glossary.length} คำ</div></div>
           <button class="btn sm" data-action="open" data-id="${p.id}">เปิด</button>
           <button class="btn sm ghost danger" data-action="delete-project" data-id="${p.id}" aria-label="ลบ ${esc(p.name)}">ลบ</button></li>`,
         )
@@ -168,7 +185,7 @@ function viewHome() {
       <p class="eyebrow">NOVEL LOCK</p>
       <h1>แปลนิยาย <em>ชื่อไม่เพี้ยน</em></h1>
       <p class="lede">แปลนิยายต่างประเทศเป็นภาษาไทย ทำตามคู่มือด้านล่าง ${GUIDE.length} ขั้นจบ</p>
-      <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button></div>
+      <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button><label class="btn ghost">กู้คืนจากไฟล์สำรอง<input type="file" id="restoreIn" accept=".json" hidden></label></div>
     </div>
     <img class="hero-logo" src="/favicon.svg" alt="" width="200" height="200">
   </section>
@@ -179,7 +196,7 @@ function viewHome() {
   </div>
   <div class="card small muted">
     <h3>เก็บข้อมูลยังไง</h3>
-    นิยาย คำแปล และอภิธานศัพท์ เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น (สำรองเป็นไฟล์ได้ที่แท็บ “ส่งออก”) ·
+    นิยายและคำแปลเก็บในเบราว์เซอร์เครื่องนี้เท่านั้น (สำรองเป็นไฟล์ได้ที่แท็บ “ส่งออก”) ·
     API key เก็บในเครื่องนี้ และส่งตรงไปที่ผู้ให้บริการ AI ที่คุณเลือก ไม่ผ่านเซิร์ฟเวอร์ของเรา
   </div>`;
 }
@@ -226,7 +243,7 @@ function viewChapters() {
       <td class="ch-title"><a href="#" data-action="read-book" data-id="${c.id}">${esc(c.titleT || c.title)}</a>${c.titleT && c.titleT !== c.title ? `<small>${esc(c.title)}</small>` : ""}</td>
       <td class="muted small hide-sm">${fmt(c.text.length)} ตัวอักษร</td>
       <td>${chapterBadge(c)}${c.error ? `<div class="small" style="color:var(--accent)">${esc(c.error.slice(0, 120))}</div>` : ""}</td>
-      <td class="row end" style="flex-wrap:nowrap">${c.translation ? `<button class="btn sm primary" data-action="read-book" data-id="${c.id}">อ่าน</button>` : ""}<button class="btn sm" data-action="translate-one" data-id="${c.id}">${c.translation ? "แปลใหม่" : "แปล"}</button><button class="btn sm ghost danger" data-action="delete-chapter" data-id="${c.id}" aria-label="ลบตอน">ลบ</button></td>
+      <td><div class="row end" style="flex-wrap:nowrap">${c.translation ? `<button class="btn sm primary" data-action="read-book" data-id="${c.id}">อ่าน</button>` : ""}<button class="btn sm" data-action="translate-one" data-id="${c.id}">${c.translation ? "แปลใหม่" : "แปล"}</button><button class="btn sm ghost danger" data-action="delete-chapter" data-id="${c.id}" aria-label="ลบตอน">ลบ</button></div></td>
     </tr>`,
     )
     .join("");
@@ -399,14 +416,14 @@ async function runQueue(ids) {
   save(true);
   render();
   if (flagged.length && !stopped && ai().paid) {
-    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน · กำลังแก้ ${flagged.length} ตอนที่มีคำไม่ตรงอภิธานศัพท์`);
+    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน · กำลังแก้ ${flagged.length} ตอนที่มีชื่อไม่ตรง`);
     const firstId = run.firstId;
     await fixQueue(flagged);
     if (state.run) state.run.firstId = firstId;
     renderRunner();
     return;
   }
-  if (flagged.length) log(`มี ${flagged.length} ตอนที่มีคำไม่ตรงอภิธานศัพท์ · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
+  if (flagged.length) log(`มี ${flagged.length} ตอนที่มีชื่อไม่ตรง · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
   toast(`แปลเสร็จ ${run.done}/${run.total} ตอน${run.added ? ` · คำใหม่ ${run.added} คำ` : ""}`);
 }
 
@@ -726,14 +743,16 @@ function viewSettings() {
   </div>
   <div class="card">
     <h2>วิธีแปล</h2>
-    <label class="check"><input type="checkbox" name="autoFix" ${p.autoFix ? "checked" : ""}><span><b>ตรวจและแก้ชื่อที่เพี้ยนอัตโนมัติ</b><br><span class="small muted">ถ้าตรวจเจอคำที่ไม่ตรงอภิธานศัพท์ ให้ AI แก้เฉพาะจุด (เรียก AI เพิ่มเฉพาะท่อนที่มีปัญหา)</span></span></label>
+    <label class="check"><input type="checkbox" name="autoFix" ${p.autoFix ? "checked" : ""}><span><b>ตรวจและแก้ชื่อที่เพี้ยนอัตโนมัติ</b><br><span class="small muted">ถ้าเจอชื่อที่แปลไม่ตรงกับที่ระบบจำไว้ ให้ AI แก้เฉพาะจุดนั้น</span></span></label>
     <label class="check"><input type="checkbox" name="polish" ${p.polish ? "checked" : ""}><span><b>ขัดเกลาอีกรอบ</b><br><span class="small muted">ให้ AI อ่านเทียบต้นฉบับแล้วเกลาสำนวน สวยขึ้นแต่ใช้โควตาเป็น 2 เท่า</span></span></label>
     <div class="grid2" style="margin-top:10px">
-      <label class="field"><span>คำใหม่ที่ AI หาเจอ</span><select name="autoTerms">
-        <option value="auto" ${p.autoTerms === "auto" ? "selected" : ""}>ล็อกให้เลย (แก้ทีหลังได้)</option>
+      <label class="field"><span>ชื่อตัวละคร สถานที่ ที่เจอใหม่</span><select name="autoTerms">
+        <option value="auto" ${p.autoTerms === "auto" ? "selected" : ""}>จำชื่อใหม่ให้อัตโนมัติ (แนะนำ)</option>
         <option value="off" ${p.autoTerms === "off" ? "selected" : ""}>ไม่ต้องหา (ประหยัดโควตา)</option></select></label>
-      <label class="field"><span>ขนาดท่อนต่อการเรียก AI 1 ครั้ง (ตัวอักษรต้นฉบับ)</span><input type="number" name="chunkSize" min="500" max="20000" step="100" value="${size}"></label>
     </div>
+    <details style="margin-top:10px"><summary class="small muted">ตั้งค่าขั้นสูง</summary>
+      <label class="field" style="margin-top:8px"><span>ขนาดท่อนต่อการเรียก AI 1 ครั้ง (ตัวอักษรต้นฉบับ)</span><input type="number" name="chunkSize" min="500" max="20000" step="100" value="${size}"></label>
+    </details>
     <label class="field" style="margin-top:10px"><span>คำสั่งเพิ่มเติมถึง AI (ไม่บังคับ)</span><textarea name="custom" placeholder="เช่น พระเอกแทนตัวเองว่า ข้า เรียกนางเอกว่า เจ้า · ไม่ต้องแปลชื่อเมนูอาหาร · ใช้ภาษาวัยรุ่นในบทพูดของน้องสาว">${esc(p.custom)}</textarea></label>
   </div>
   </form>
@@ -774,7 +793,7 @@ function viewAI() {
   <div class="card">
     <h2>เลือก AI</h2>
     <div class="providers">${Object.entries(PROVIDERS)
-      .map(([id, x]) => `<label class="prov"><input type="radio" name="provider" value="${id}" ${id === a.provider ? "checked" : ""}><b>${esc(x.name)}</b><br><span class="badge ${/ฟรี/.test(x.badge) ? "ok" : ""}">${esc(x.badge)}</span>${x.tested ? "" : ` <span class="badge" title="โค้ดรองรับแล้ว แต่ยังไม่ได้ทดสอบกับ key จริง">ยังไม่ได้ทดสอบ</span>`}</label>`)
+      .map(([id, x]) => `<label class="prov"><input type="radio" name="provider" value="${id}" ${id === a.provider ? "checked" : ""}><b>${esc(x.name)}</b><br><span class="badge ${/ฟรี/.test(x.badge) ? "ok" : ""}">${esc(x.badge)}</span></label>`)
       .join("")}</div>
   </div>
   <div class="card">
@@ -794,7 +813,7 @@ function viewAI() {
       <label class="field"><span>แปลพร้อมกันกี่ตอน</span><select id="aiParallel">${[1, 2, 3, 5, 8].map((n) => `<option value="${n}" ${n === Number(a.parallel) ? "selected" : ""}>${n} ตอน${n === 1 ? " (ทีละตอน)" : ""}</option>`).join("")}</select></label>
     </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aiPaid" ${a.paid ? "checked" : ""}><span>key นี้เป็นแบบเสียเงิน ไม่ต้องเว้นระยะรอโควตาฟรี</span></label>
-    <p class="small muted" style="margin:8px 0 0">key ฟรี (Gemini ฟรี, Groq, Pollinations) ใช้ 1 ตอน · key เสียเงิน (OpenAI, Claude, Gemini แบบผูกบัตร) ติ๊กช่องนี้แล้วตั้ง 3–5 ตอน จะเร็วขึ้นหลายเท่า · คำในอภิธานศัพท์ใช้ร่วมกันทุกตอน คำใหม่ที่เจอจะถูกล็อกและใช้กับตอนถัดไปทันที</p>
+    <p class="small muted" style="margin:8px 0 0">key ฟรี (Gemini ฟรี, Groq, Pollinations) ใช้ 1 ตอน · key เสียเงิน (OpenAI, Claude, Gemini แบบผูกบัตร) ติ๊กช่องนี้แล้วตั้ง 3–5 ตอน จะเร็วขึ้นหลายเท่า · ชื่อที่ระบบจำได้ใช้ร่วมกันทุกตอน ชื่อใหม่ที่เจอจะถูกจำและใช้กับตอนถัดไปทันที</p>
     ${exhaustedSet().size ? `<p class="small muted" style="margin:10px 0 0">โควตาฟรีวันนี้หมดแล้ว: ${esc([...exhaustedSet()].map((k) => k.split("/").slice(1).join("/")).join(", "))} · <a href="#" data-action="reset-quota">ล้าง (ถ้าโควตารีเซ็ตแล้ว)</a></p>` : ""}
   </div>
   <div class="card small muted">key เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น และส่งตรงไปที่ ${esc(p.name)} · ถ้าใช้เครื่องคนอื่น กดล้าง key ก่อนออก <button class="btn sm" data-action="clear-key">ล้าง key</button></div>
@@ -872,37 +891,36 @@ function viewExport() {
       <button class="btn" data-action="exp" data-kind="epub" ${done.length ? "" : "disabled"}>E-book .epub</button>
       <button class="btn" data-action="exp" data-kind="txt" ${done.length ? "" : "disabled"}>.txt รวมเล่ม</button>
       <button class="btn" data-action="exp" data-kind="zip" ${done.length ? "" : "disabled"}>.zip แยกไฟล์ทีละตอน</button>
-      <button class="btn" data-action="exp" data-kind="md" ${done.length ? "" : "disabled"}>Markdown</button>
       <button class="btn" data-action="exp" data-kind="bi" ${done.length ? "" : "disabled"}>.txt ต้นฉบับคู่คำแปล</button>
     </div>
   </div>
   <div class="card">
     <h2>สำรอง / ย้ายเครื่อง</h2>
-    <p class="muted small">ไฟล์สำรองมีทุกอย่างของเรื่องนี้ (ต้นฉบับ คำแปล อภิธานศัพท์ การตั้งค่า) แต่ไม่มี API key</p>
+    <p class="muted small">ไฟล์สำรองมีทุกอย่างของเรื่องนี้ (ต้นฉบับ คำแปล ชื่อที่ระบบจำไว้ การตั้งค่า) แต่ไม่มี API key · ย้ายเครื่องแล้วกด “กู้คืนจากไฟล์สำรอง” ที่หน้าแรก</p>
     <div class="row"><button class="btn" data-action="backup">ดาวน์โหลดไฟล์สำรอง .json</button>
-    <label class="btn">กู้คืนจากไฟล์สำรอง<input type="file" id="restoreIn" accept=".json" hidden></label>
-    <button class="btn" data-action="export-csv">อภิธานศัพท์ .csv</button></div>
+    <label class="btn">กู้คืนจากไฟล์สำรอง<input type="file" id="restoreIn" accept=".json" hidden></label></div>
   </div>`;
 }
 
-afterRender.export = () => {
-  $("#restoreIn").addEventListener("change", async (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    try {
-      const data = JSON.parse(await f.text());
-      if (!Array.isArray(data.chapters) || !Array.isArray(data.glossary)) throw new Error("ไม่ใช่ไฟล์สำรองของ Novel Lock");
-      const p = { ...blankProject(data.name || "กู้คืน"), ...data, id: `p${Date.now().toString(36)}` };
-      await store.saveProject(p);
-      await refreshProjects();
-      state.project = p;
-      go("chapters");
-      toast("กู้คืนแล้ว (เป็นโปรเจกต์ใหม่)");
-    } catch (err) {
-      toast(`กู้คืนไม่ได้: ${err.message}`);
-    }
-  });
-};
+async function restoreBackup(f) {
+  try {
+    const data = JSON.parse(await f.text());
+    if (!Array.isArray(data.chapters) || !Array.isArray(data.glossary)) throw new Error("ไม่ใช่ไฟล์สำรองของ Novel Lock");
+    const p = { ...blankProject(data.name || "กู้คืน"), ...data, id: `p${Date.now().toString(36)}` };
+    resetStuck(p);
+    await store.saveProject(p);
+    await refreshProjects();
+    state.project = p;
+    go("chapters");
+    toast("กู้คืนแล้ว (เป็นเรื่องใหม่ในรายการ)");
+  } catch (err) {
+    toast(`กู้คืนไม่ได้: ${err.message}`);
+  }
+}
+
+const bindRestore = () => $("#restoreIn")?.addEventListener("change", (e) => e.target.files[0] && restoreBackup(e.target.files[0]));
+afterRender.export = bindRestore;
+afterRender.home = bindRestore;
 
 async function exportAs(kind) {
   const p = state.project;
@@ -1070,6 +1088,21 @@ document.addEventListener("click", (e) => {
   if (!fn) return;
   if (el.tagName === "A" || el.tagName === "BUTTON") e.preventDefault();
   fn(el, e);
+});
+
+window.addEventListener("popstate", async (e) => {
+  const h = e.state;
+  if (!h) return;
+  if (h.project && h.project !== state.project?.id) {
+    const p = await store.getProject(h.project);
+    if (p) {
+      resetStuck(p);
+      state.project = p;
+      state.selected = new Set();
+    }
+  }
+  if (h.chapter) state.chapterId = h.chapter;
+  go(h.view, { fromHistory: true });
 });
 
 window.addEventListener("beforeunload", (e) => {
