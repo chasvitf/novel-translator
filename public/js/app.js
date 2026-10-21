@@ -539,7 +539,7 @@ function viewBook() {
   if (i < 0) i = Math.max(0, p.chapters.findIndex((c) => c.translation));
   const c = p.chapters[i];
   state.chapterId = c.id;
-  const nav = (where) => `<nav class="book-nav ${where}">
+  const nav = (where) => `<nav class="book-nav at-${where}">
     <button class="btn" data-action="prev" ${i === 0 ? "disabled" : ""}>‹ ตอนก่อน</button>
     ${where === "top" ? `<select id="chapterSel" aria-label="เลือกตอน">${p.chapters.map((x, j) => `<option value="${x.id}" ${x.id === c.id ? "selected" : ""}>${j + 1}. ${esc(x.titleT || x.title)}${x.translation ? "" : " (ยังไม่แปล)"}</option>`).join("")}</select>` : `<span class="muted small">${i + 1} / ${p.chapters.length}</span>`}
     <button class="btn" data-action="next" ${i === p.chapters.length - 1 ? "disabled" : ""}>ตอนต่อไป ›</button></nav>`;
