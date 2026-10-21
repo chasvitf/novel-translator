@@ -617,11 +617,12 @@ afterRender.glossary = () => {
 
 function offerReplace(oldT, newT) {
   const p = state.project;
-  const hit = p.chapters.filter((c) => c.translation?.includes(oldT));
+  const hit = p.chapters.filter((c) => `${c.translation} ${c.summary} ${c.titleT}`.includes(oldT));
   if (!hit.length) return;
   if (!confirm(`เปลี่ยน “${oldT}” เป็น “${newT}” ในคำแปลที่มีอยู่แล้ว ${hit.length} ตอนด้วยไหม?`)) return;
   for (const c of hit) {
-    c.translation = c.translation.split(oldT).join(newT);
+    // Summaries feed the next chapters' prompts, so they must use the new name too.
+    for (const k of ["translation", "summary", "titleT"]) if (c[k]) c[k] = c[k].split(oldT).join(newT);
     for (const ch of c.chunks || []) ch.out = ch.out.split(oldT).join(newT);
     recheckChapter(p, c);
   }
