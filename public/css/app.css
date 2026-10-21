@@ -118,21 +118,16 @@ th { font-size: .8rem; color: var(--ink-2); font-weight: 500; }
 td input[type="text"], td select { padding: 4px 8px; }
 
 /* home */
-.hero { display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; align-items: center; margin: 8px 0 24px; }
-.hero h1 { font-size: 2rem; }
+.hero { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; margin: 8px 0 20px; }
+.hero h1 { font-size: 2rem; margin: 0; }
 .hero h1 em { font-style: normal; color: var(--accent); }
-.hero ul { padding-left: 1.1em; margin: 0 0 1em; }
-.hero li { margin-bottom: .2em; }
-.demo-pair { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; font-family: var(--read); box-shadow: var(--shadow); }
-.demo-pair .src { color: var(--ink-2); border-bottom: 1px dashed var(--line); padding-bottom: 8px; margin-bottom: 8px; }
-.samples { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-.sample { text-align: left; border: 1px solid var(--line); background: var(--card); border-radius: var(--radius); padding: 12px; cursor: pointer; }
-.sample:hover { border-color: var(--accent); }
-.sample b { display: block; font-family: var(--read); }
 .projects li { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .projects { list-style: none; padding: 0; margin: 0; }
-.steps { margin: 0; padding-left: 1.3em; }
-.steps li { margin-bottom: .45em; }
+.guide { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+.guide li { display: flex; gap: 14px; align-items: flex-start; background: var(--soft); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.guide .num { flex: none; width: 44px; height: 44px; border-radius: 10px; background: #b42318; color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 1.3rem; }
+.guide li.done .num { background: var(--ok-soft); color: var(--ok); }
+.guide p { margin: .25em 0 0; color: var(--ink-2); font-size: .92rem; }
 
 /* chapters */
 .drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 14px; text-align: center; color: var(--ink-2); }
@@ -172,7 +167,6 @@ mark.miss { background: var(--accent-soft); outline: 1px solid var(--accent); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 @media (max-width: 760px) {
-  .hero { grid-template-columns: 1fr; }
   .hero h1 { font-size: 1.6rem; }
   .reader { grid-template-columns: 1fr; }
   .pane { padding: 14px; font-size: 16px; }
