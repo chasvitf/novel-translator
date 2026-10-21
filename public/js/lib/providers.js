@@ -1,0 +1,325 @@
+// AI providers. Calls go straight from the browser to the provider with the user's own key;
+// nothing passes through a server of ours.
+
+export const PROVIDERS = {
+  gemini: {
+    name: "Google Gemini",
+    badge: "ฟรี · ต้องมี key",
+    keyUrl: "https://aistudio.google.com/apikey",
+    keyHelp: "เข้า aistudio.google.com/apikey → Create API key (ฟรี ไม่ต้องผูกบัตร)",
+    defaultModel: "gemini-3.5-flash",
+    // Free tier: about 20 requests per day per model, so the caller moves down this list as each runs out.
+    models: ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemma-4-31b-it"],
+    minIntervalMs: 4500,
+    tested: true,
+  },
+  pollinations: {
+    name: "Pollinations (ไม่ต้องมี key)",
+    badge: "ฟรี · ไม่ต้องสมัคร · ช้า",
+    noKey: true,
+    keyHelp: "ไม่ต้องมี key แต่จำกัด 1 ครั้งต่อ 30 วินาที เหมาะกับลองเล่น",
+    endpoint: "https://text.pollinations.ai/openai",
+    defaultModel: "openai",
+    models: ["openai"],
+    minIntervalMs: 31000,
+    tested: true,
+  },
+  groq: {
+    name: "Groq",
+    badge: "ฟรี · ต้องมี key · เร็ว",
+    keyUrl: "https://console.groq.com/keys",
+    keyHelp: "เข้า console.groq.com/keys → Create API Key (ฟรี)",
+    base: "https://api.groq.com/openai/v1",
+    defaultModel: "llama-3.3-70b-versatile",
+    models: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3-32b"],
+    minIntervalMs: 2500,
+  },
+  openrouter: {
+    name: "OpenRouter",
+    badge: "มีโมเดลฟรี · ต้องมี key",
+    keyUrl: "https://openrouter.ai/keys",
+    keyHelp: "เข้า openrouter.ai/keys → Create Key แล้วเลือกโมเดลที่ลงท้าย :free",
+    base: "https://openrouter.ai/api/v1",
+    defaultModel: "deepseek/deepseek-chat-v3.1:free",
+    models: [],
+    minIntervalMs: 3500,
+  },
+  openai: {
+    name: "OpenAI",
+    badge: "เสียเงิน",
+    keyUrl: "https://platform.openai.com/api-keys",
+    keyHelp: "เข้า platform.openai.com/api-keys (ต้องเติมเงิน)",
+    base: "https://api.openai.com/v1",
+    defaultModel: "gpt-5-mini",
+    models: [],
+    minIntervalMs: 500,
+  },
+  anthropic: {
+    name: "Anthropic Claude",
+    badge: "เสียเงิน · สำนวนดีมาก",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+    keyHelp: "เข้า console.anthropic.com → API Keys (ต้องเติมเงิน)",
+    defaultModel: "claude-opus-5-5",
+    models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+    minIntervalMs: 500,
+  },
+  custom: {
+    name: "อื่นๆ (OpenAI-compatible / Ollama ในเครื่อง)",
+    badge: "ใส่ URL เอง",
+    keyHelp: "เช่น Ollama: http://localhost:11434/v1 (key เว้นว่างได้)",
+    base: "",
+    defaultModel: "",
+    models: [],
+    minIntervalMs: 0,
+  },
+};
+
+export class AIError extends Error {
+  constructor(kind, message, retryAfterMs = 0) {
+    super(message);
+    this.kind = kind; // rate | quota | auth | blocked | network | bad
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+const sleep = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new DOMException("หยุดแล้ว", "AbortError"));
+    }, { once: true });
+  });
+
+async function post(url, headers, body, signal) {
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal });
+  } catch (e) {
+    if (e.name === "AbortError") throw e;
+    throw new AIError("network", `เชื่อมต่อไม่ได้: ${e.message}`);
+  }
+  const text = await res.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    /* some errors are plain text */
+  }
+  if (!res.ok) throw httpError(res, data, text);
+  return data ?? text;
+}
+
+function httpError(res, data, text) {
+  const msg = data?.error?.message || data?.message || (typeof data?.error === "string" ? data.error : "") || text.slice(0, 300);
+  const retryHeader = Number(res.headers.get("retry-after")) * 1000 || 0;
+  // Gemini puts the wait in error.details[].retryDelay ("23s").
+  const geminiDelay = (data?.error?.details || []).map((d) => parseFloat(d.retryDelay)).find((n) => n > 0);
+  const pollDelay = /retry after (\d+)s/i.exec(msg)?.[1];
+  const wait = retryHeader || (geminiDelay ? geminiDelay * 1000 : 0) || (pollDelay ? Number(pollDelay) * 1000 : 0);
+  if (res.status === 429 || data?.error?.code === "FREE_LIMIT" || (res.status === 402 && /limit/i.test(msg))) {
+    const quotaIds = (data?.error?.details || []).flatMap((d) => (d.violations || []).map((v) => v.quotaId || "")).join(" ");
+    const daily = /per ?day|daily|PerDay/i.test(`${msg} ${quotaIds}`) || wait > 15 * 60 * 1000;
+    return daily ? new AIError("quota", `โควตาฟรีของวันนี้หมดแล้ว (${msg.slice(0, 120)})`) : new AIError("rate", `ถูกจำกัดความถี่: ${msg.slice(0, 160)}`, wait || 20000);
+  }
+  if (res.status === 401 || res.status === 403 || /api key not valid|invalid api key|unauthorized/i.test(msg)) return new AIError("auth", `key ใช้ไม่ได้: ${msg.slice(0, 160)}`);
+  if (res.status >= 500) return new AIError("network", `เซิร์ฟเวอร์ของผู้ให้บริการขัดข้อง (${res.status})`, 5000);
+  return new AIError("bad", `${res.status}: ${msg.slice(0, 300)}`);
+}
+
+// ---------- Gemini (native API) ----------
+
+const GEMINI = "https://generativelanguage.googleapis.com/v1beta";
+const SAFETY = ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"].map((category) => ({ category, threshold: "BLOCK_NONE" }));
+
+async function gemini(cfg, { system, user, json, signal }) {
+  const body = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: "user", parts: [{ text: user }] }],
+    generationConfig: { temperature: json ? 0.2 : 0.7, maxOutputTokens: 32768, ...(json ? { responseMimeType: "application/json" } : {}) },
+    safetySettings: SAFETY,
+  };
+  const d = await post(`${GEMINI}/models/${encodeURIComponent(cfg.model)}:generateContent`, { "x-goog-api-key": cfg.key }, body, signal);
+  if (d.promptFeedback?.blockReason) throw new AIError("blocked", `Gemini ไม่ยอมแปลท่อนนี้ (${d.promptFeedback.blockReason})`);
+  const cand = d.candidates?.[0];
+  const text = (cand?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
+  if (!text) throw new AIError(cand?.finishReason === "SAFETY" || cand?.finishReason === "PROHIBITED_CONTENT" ? "blocked" : "bad", `Gemini ตอบว่างเปล่า (${cand?.finishReason || "ไม่ทราบสาเหตุ"})`);
+  if (cand.finishReason === "MAX_TOKENS") throw new AIError("bad", "คำตอบยาวเกินกำหนด ลองลดขนาดท่อนในการตั้งค่า");
+  return { text, usage: d.usageMetadata?.totalTokenCount || 0 };
+}
+
+async function geminiModels(cfg) {
+  const r = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { "x-goog-api-key": cfg.key } });
+  if (!r.ok) throw httpError(r, await r.json().catch(() => null), "");
+  const d = await r.json();
+  const skip = /tts|image|robotics|computer|embed|transcribe|research|antigravity|lyria|banana|omni|customtools|aqa|argon/i;
+  return d.models
+    .filter((m) => m.supportedGenerationMethods?.includes("generateContent") && !skip.test(m.name))
+    .map((m) => m.name.replace(/^models\//, ""));
+}
+
+// ---------- OpenAI-compatible (Groq, OpenRouter, OpenAI, Pollinations, Ollama…) ----------
+
+function compatUrl(p, cfg) {
+  if (p.endpoint) return p.endpoint;
+  const base = (cfg.base || p.base || "").replace(/\/+$/, "");
+  if (!base) throw new AIError("bad", "ยังไม่ได้ใส่ URL ของผู้ให้บริการ");
+  return `${base}/chat/completions`;
+}
+
+async function compat(cfg, { system, user, json, signal }) {
+  const p = PROVIDERS[cfg.provider];
+  const headers = {};
+  if (cfg.key) headers.Authorization = `Bearer ${cfg.key}`;
+  if (cfg.provider === "openrouter") {
+    headers["HTTP-Referer"] = typeof location !== "undefined" ? location.origin : "https://novel-th.vercel.app";
+    headers["X-Title"] = "Novel Lock";
+  }
+  const body = {
+    model: cfg.model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  };
+  // Reasoning models on OpenAI reject a custom temperature.
+  if (cfg.provider !== "openai") body.temperature = json ? 0.2 : 0.7;
+  if (json && cfg.provider !== "pollinations") body.response_format = { type: "json_object" };
+  const d = await post(compatUrl(p, cfg), headers, body, signal);
+  if (typeof d === "string") return { text: d, usage: 0 };
+  const choice = d.choices?.[0];
+  let text = choice?.message?.content || "";
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(); // qwen/deepseek reasoning traces
+  if (!text) throw new AIError(choice?.finish_reason === "content_filter" ? "blocked" : "bad", `AI ตอบว่างเปล่า (${choice?.finish_reason || "ไม่ทราบสาเหตุ"})`);
+  if (choice.finish_reason === "length") throw new AIError("bad", "คำตอบยาวเกินกำหนด ลองลดขนาดท่อนในการตั้งค่า");
+  return { text, usage: d.usage?.total_tokens || 0 };
+}
+
+async function compatModels(cfg) {
+  const p = PROVIDERS[cfg.provider];
+  if (p.endpoint) return p.models;
+  const base = (cfg.base || p.base || "").replace(/\/+$/, "");
+  const r = await fetch(`${base}/models`, { headers: cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {} });
+  if (!r.ok) throw httpError(r, await r.json().catch(() => null), "");
+  const ids = ((await r.json()).data || []).map((m) => m.id);
+  if (cfg.provider === "openrouter") return ids.filter((id) => id.endsWith(":free")).concat(ids.filter((id) => !id.endsWith(":free")));
+  if (cfg.provider === "openai") return ids.filter((id) => /^(gpt|o\d|chatgpt)/.test(id) && !/audio|realtime|image|tts|transcribe|search/.test(id));
+  if (cfg.provider === "groq") return ids.filter((id) => !/whisper|tts|guard|orpheus/.test(id));
+  return ids;
+}
+
+// ---------- Anthropic (official SDK, loaded on demand) ----------
+
+let loadAnthropic = () => import("https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm").then((m) => m.default);
+export const setAnthropicLoader = (fn) => (loadAnthropic = fn);
+
+const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-opus-5"]);
+
+async function anthropicClient(cfg) {
+  const Anthropic = await loadAnthropic();
+  return { Anthropic, client: new Anthropic({ apiKey: cfg.key, dangerouslyAllowBrowser: true, maxRetries: 0 }) };
+}
+
+function anthropicError(Anthropic, e) {
+  if (e instanceof Anthropic.RateLimitError) return new AIError("rate", `ถูกจำกัดความถี่: ${e.message}`, Number(e.headers?.get?.("retry-after")) * 1000 || 20000);
+  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return new AIError("auth", `key ใช้ไม่ได้: ${e.message}`);
+  if (e instanceof Anthropic.InternalServerError || e instanceof Anthropic.APIConnectionError) return new AIError("network", e.message, 5000);
+  if (e instanceof Anthropic.APIError) return new AIError("bad", e.message);
+  return e;
+}
+
+async function anthropic(cfg, { system, user, json, signal }) {
+  const { Anthropic, client } = await anthropicClient(cfg);
+  const params = {
+    model: cfg.model,
+    max_tokens: 16000,
+    system: json ? `${system}\nReply with the JSON object only.` : system,
+    messages: [{ role: "user", content: user }],
+    output_config: { effort: "medium" },
+  };
+  // Opt into server-side fallbacks so a refusal is retried on another model.
+  if (FALLBACK_MODELS.has(cfg.model)) Object.assign(params, { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" });
+  let msg;
+  try {
+    msg = await client.beta.messages.create(params, { signal });
+  } catch (e) {
+    throw anthropicError(Anthropic, e);
+  }
+  if (msg.stop_reason === "refusal") throw new AIError("blocked", "Claude ไม่ยอมแปลท่อนนี้");
+  if (msg.stop_reason === "max_tokens") throw new AIError("bad", "คำตอบยาวเกินกำหนด ลองลดขนาดท่อนในการตั้งค่า");
+  const text = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+  return { text, usage: (msg.usage?.input_tokens || 0) + (msg.usage?.output_tokens || 0) };
+}
+
+async function anthropicModels(cfg) {
+  const { Anthropic, client } = await anthropicClient(cfg);
+  try {
+    const ids = [];
+    for await (const m of client.models.list()) ids.push(m.id);
+    return ids;
+  } catch (e) {
+    throw anthropicError(Anthropic, e);
+  }
+}
+
+// ---------- public API ----------
+
+export function complete(cfg, req) {
+  if (!PROVIDERS[cfg.provider]) throw new AIError("bad", "ไม่รู้จักผู้ให้บริการนี้");
+  if (!cfg.key && !PROVIDERS[cfg.provider].noKey && cfg.provider !== "custom") throw new AIError("auth", "ยังไม่ได้ใส่ API key");
+  if (cfg.provider === "gemini") return gemini(cfg, req);
+  if (cfg.provider === "anthropic") return anthropic(cfg, req);
+  return compat(cfg, req);
+}
+
+export function listModels(cfg) {
+  if (cfg.provider === "gemini") return geminiModels(cfg);
+  if (cfg.provider === "anthropic") return anthropicModels(cfg);
+  return compatModels(cfg);
+}
+
+// Spaces calls out per provider, retries rate limits and network errors, and moves on to the
+// next model in `cfg.fallbackModels` when a model's daily free quota runs out (each model has its own).
+// `exhausted` is a Set of "provider/model" keys the app can persist for the day.
+export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), maxAttempts = 6 } = {}) {
+  const minGap = cfg.minIntervalMs ?? PROVIDERS[cfg.provider]?.minIntervalMs ?? 0;
+  const chain = [cfg.model, ...(cfg.fallbackModels || [])].filter((m, i, a) => m && a.indexOf(m) === i);
+  const keyOf = (m) => `${cfg.provider}/${m}`;
+  let last = 0;
+  const call = async function (req) {
+    const models = chain.filter((m) => !exhausted.has(keyOf(m)));
+    if (!models.length) throw new AIError("quota", "โควตาฟรีของวันนี้หมดทุกโมเดลแล้ว ลองใหม่พรุ่งนี้ หรือเปลี่ยนผู้ให้บริการ/ใส่ key อื่น");
+    const model = models[0];
+    let overloaded = 0;
+    for (let attempt = 1; ; attempt++) {
+      const gap = last + minGap - Date.now();
+      if (gap > 0) {
+        if (gap > 3000) onWait?.(gap, "เว้นระยะตามโควตาฟรี");
+        await sleep(gap, req.signal);
+      }
+      last = Date.now();
+      try {
+        const r = await complete({ ...cfg, model }, req);
+        return { ...r, model };
+      } catch (e) {
+        if (!(e instanceof AIError)) throw e;
+        if (e.kind === "network" && /\(503\)/.test(e.message)) overloaded++;
+        // Daily quota gone, or the model keeps answering "overloaded": continue on the next model.
+        if (e.kind === "quota" || (overloaded >= 3 && models.length > 1)) {
+          if (e.kind === "quota") exhausted.add(keyOf(model));
+          else chain.push(chain.splice(chain.indexOf(model), 1)[0]); // try it again later
+          const next = chain.find((m) => !exhausted.has(keyOf(m)) && m !== model);
+          if (!next) throw e.kind === "quota" ? new AIError("quota", "โควตาฟรีของวันนี้หมดทุกโมเดลแล้ว ลองใหม่พรุ่งนี้ หรือเปลี่ยนผู้ให้บริการ/ใส่ key อื่น") : e;
+          onSwitch?.(model, next, e.message);
+          return call(req);
+        }
+        const retryable = e.kind === "rate" || e.kind === "network";
+        if (!retryable || attempt >= maxAttempts) throw e;
+        const wait = Math.max(e.retryAfterMs, 2000 * 2 ** (attempt - 1));
+        onWait?.(wait, e.message);
+        await sleep(wait, req.signal);
+      }
+    }
+  };
+  return call;
+}
