@@ -123,7 +123,7 @@ function render() {
     else b.removeAttribute("aria-current");
   }
   $("#topProject").innerHTML = p && state.view !== "home" ? `<span class="muted small">โปรเจกต์</span> <b>${esc(p.name)}</b> <span class="badge">${esc(langByCode(p.srcLang).name)} → ${esc(langByCode(p.tgtLang).name)}</span>` : "";
-  const views = { home: viewHome, chapters: viewChapters, read: viewRead, glossary: viewGlossary, settings: viewSettings, export: viewExport, ai: viewAI };
+  const views = { home: viewHome, chapters: viewChapters, book: viewBook, read: viewRead, glossary: viewGlossary, settings: viewSettings, export: viewExport, ai: viewAI };
   main.innerHTML = views[state.view]();
   afterRender[state.view]?.();
   renderRunner();
@@ -148,7 +148,7 @@ const GUIDE = [
   { t: "สร้างเรื่อง & ใส่นิยาย", d: "กด <b>+ สร้างโปรเจกต์ใหม่</b> แล้วลากไฟล์ .txt .docx .epub มาวาง หรือวางข้อความ แอปแยกตอนให้เอง" },
   { t: "ล็อกชื่อ", d: "แท็บ <b>อภิธานศัพท์</b> ใส่ชื่อที่ต้องการ AI จะหาชื่อใหม่แล้วล็อกให้ระหว่างแปล" },
   { t: "กดแปล", d: "แท็บ <b>ตอน</b> กด <b>แปลที่ยังไม่แปล</b> แล้วเปิดหน้าเว็บค้างไว้จนเสร็จ" },
-  { t: "อ่าน & แก้", d: "แท็บ <b>อ่าน & แก้</b> ถ้ามีกล่องเหลือง <b>ตรวจพบ … จุด</b> กด <b>ให้ AI แก้</b>" },
+  { t: "อ่าน & แก้", d: "แท็บ <b>อ่าน</b> อ่านคำแปลเต็มหน้า · แท็บ <b>อ่าน & แก้</b> ถ้ามีกล่องเหลือง <b>ตรวจพบ … จุด</b> กด <b>ให้ AI แก้</b>" },
   { t: "ส่งออกไฟล์", d: "แท็บ <b>ส่งออก</b> กด <b>Word .docx</b> หรือ <b>E-book .epub</b> และดาวน์โหลดไฟล์สำรองเก็บไว้" },
 ];
 
@@ -224,10 +224,10 @@ function viewChapters() {
       (c, i) => `<tr>
       <td><input type="checkbox" data-action="select" data-id="${c.id}" ${state.selected.has(c.id) ? "checked" : ""} aria-label="เลือก ${esc(c.title)}"></td>
       <td class="muted hide-sm">${i + 1}</td>
-      <td class="ch-title"><a href="#" data-action="read" data-id="${c.id}">${esc(c.titleT || c.title)}</a>${c.titleT && c.titleT !== c.title ? `<small>${esc(c.title)}</small>` : ""}</td>
+      <td class="ch-title"><a href="#" data-action="${c.translation ? "read-book" : "read"}" data-id="${c.id}">${esc(c.titleT || c.title)}</a>${c.titleT && c.titleT !== c.title ? `<small>${esc(c.title)}</small>` : ""}</td>
       <td class="muted small hide-sm">${fmt(c.text.length)} ตัวอักษร</td>
       <td>${chapterBadge(c)}${c.error ? `<div class="small" style="color:var(--accent)">${esc(c.error.slice(0, 120))}</div>` : ""}</td>
-      <td class="row end" style="flex-wrap:nowrap"><button class="btn sm" data-action="translate-one" data-id="${c.id}">${c.translation ? "แปลใหม่" : "แปล"}</button><button class="btn sm ghost danger" data-action="delete-chapter" data-id="${c.id}" aria-label="ลบตอน">ลบ</button></td>
+      <td class="row end" style="flex-wrap:nowrap">${c.translation ? `<button class="btn sm primary" data-action="read-book" data-id="${c.id}">อ่าน</button>` : ""}<button class="btn sm" data-action="translate-one" data-id="${c.id}">${c.translation ? "แปลใหม่" : "แปล"}</button><button class="btn sm ghost danger" data-action="delete-chapter" data-id="${c.id}" aria-label="ลบตอน">ลบ</button></td>
     </tr>`,
     )
     .join("");
@@ -365,6 +365,7 @@ async function runQueue(ids) {
         },
       });
       run.done++;
+      run.firstId ??= ch.id;
       log(`✓ ${ch.titleT || ch.title}${ch.issues?.ok === false ? ` (มีจุดต้องเช็ก ${ch.issues.missing.length + ch.issues.leftovers.length})` : ""}`);
     } catch (e) {
       if (e.name === "AbortError") {
@@ -375,7 +376,7 @@ async function runQueue(ids) {
       if (e.kind === "auth" || e.kind === "quota") break;
     } finally {
       save(true);
-      if (state.view !== "read") render();
+      if (state.view !== "read" && state.view !== "book") render();
     }
   }
   run.finished = true;
@@ -431,7 +432,7 @@ function renderRunner() {
   box.hidden = false;
   const pct = Math.round((run.done / run.total) * 100);
   box.innerHTML = `<div class="row"><b class="grow">${run.finished ? `แปลเสร็จ ${run.done}/${run.total} ตอน` : `กำลังแปล ${run.done + 1}/${run.total}: ${esc(run.current)}`}</b>
-    ${run.finished ? `<button class="btn sm" data-action="close-runner">ปิด</button>` : `<button class="btn sm" data-action="stop">หยุด</button>`}</div>
+    ${run.finished ? `${run.firstId ? `<button class="btn sm primary" data-action="read-book" data-id="${run.firstId}">อ่านเลย</button>` : ""}<button class="btn sm" data-action="close-runner">ปิด</button>` : `<button class="btn sm" data-action="stop">หยุด</button>`}</div>
     <div class="bar"><i style="width:${pct}%"></i></div>
     <div class="small">${esc(run.step)}</div>
     <div class="log">${run.log.slice(-6).map(esc).join("\n")}</div>`;
@@ -506,6 +507,36 @@ function viewRead() {
     </section>
   </div>`;
 }
+
+// Full-page reading: translation only, no highlights or source.
+function viewBook() {
+  const p = state.project;
+  if (!p.chapters.length) return `<div class="card"><p>ยังไม่มีตอน</p><button class="btn primary" data-action="view" data-view="chapters">เพิ่มตอน</button></div>`;
+  let i = p.chapters.findIndex((c) => c.id === state.chapterId);
+  if (i < 0) i = Math.max(0, p.chapters.findIndex((c) => c.translation));
+  const c = p.chapters[i];
+  state.chapterId = c.id;
+  const nav = (where) => `<nav class="book-nav ${where}">
+    <button class="btn" data-action="prev" ${i === 0 ? "disabled" : ""}>‹ ตอนก่อน</button>
+    ${where === "top" ? `<select id="chapterSel" aria-label="เลือกตอน">${p.chapters.map((x, j) => `<option value="${x.id}" ${x.id === c.id ? "selected" : ""}>${j + 1}. ${esc(x.titleT || x.title)}${x.translation ? "" : " (ยังไม่แปล)"}</option>`).join("")}</select>` : `<span class="muted small">${i + 1} / ${p.chapters.length}</span>`}
+    <button class="btn" data-action="next" ${i === p.chapters.length - 1 ? "disabled" : ""}>ตอนต่อไป ›</button></nav>`;
+  return `
+  <article class="book" lang="${p.tgtLang}">
+    ${nav("top")}
+    <p class="book-kicker">${esc(p.name)} · ตอนที่ ${i + 1}</p>
+    <h1>${esc(c.titleT || c.title)}</h1>
+    ${c.translation ? highlight(c.translation, [], "target") : `<p class="muted">ตอนนี้ยังไม่ได้แปล</p><button class="btn primary" data-action="translate-one" data-id="${c.id}" ${busy() ? "disabled" : ""}>แปลตอนนี้</button>`}
+    ${nav("bottom")}
+  </article>`;
+}
+
+afterRender.book = () => {
+  $("#chapterSel")?.addEventListener("change", (e) => {
+    state.chapterId = e.target.value;
+    render();
+    window.scrollTo({ top: 0 });
+  });
+};
 
 afterRender.read = () => {
   $("#chapterSel")?.addEventListener("change", (e) => {
@@ -915,6 +946,10 @@ const actions = {
   read: (el) => {
     state.chapterId = el.dataset.id;
     go("read");
+  },
+  "read-book": (el) => {
+    state.chapterId = el.dataset.id;
+    go("book");
   },
   prev: () => step(-1),
   next: () => step(1),
