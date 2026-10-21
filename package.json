@@ -1,1 +1,1 @@
-{"type":"module","private":true,"scripts":{"test":"node --test tests/*.test.mjs"}}
+{"type":"module","private":true,"scripts":{"dev":"python3 -m http.server -d public 8765","test":"node --test tests/*.test.mjs"}}
