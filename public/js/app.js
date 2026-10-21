@@ -115,8 +115,10 @@ function go(view) {
 function render() {
   renderPill();
   const p = state.project;
-  $("#tabs").hidden = !p || state.view === "home";
   for (const b of $("#tabs").children) {
+    const needsProject = b.dataset.view !== "home" && b.dataset.view !== "ai";
+    b.disabled = needsProject && !p;
+    b.title = b.disabled ? "สร้างหรือเปิดเรื่องก่อน" : "";
     if (b.dataset.view === state.view) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
   }
