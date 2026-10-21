@@ -15,9 +15,9 @@ export const PROVIDERS = {
   },
   pollinations: {
     name: "Pollinations (ไม่ต้องมี key)",
-    badge: "ฟรี · ไม่ต้องสมัคร · ช้า",
+    badge: "ฟรี · ไม่ต้องสมัคร · ช้า · คุณภาพต่ำกว่า",
     noKey: true,
-    keyHelp: "ไม่ต้องมี key แต่จำกัด 1 ครั้งต่อ 30 วินาที เหมาะกับลองเล่น",
+    keyHelp: "ไม่ต้องมี key แต่จำกัด 1 ครั้งต่อ 30 วินาที และสำนวนด้อยกว่า Gemini ชัดเจน (ทดสอบแล้ว: ญี่ปุ่นพอใช้ เวียดนามแปลผิดความหมาย) เหมาะกับลองเล่น ใช้งานจริงแนะนำ Gemini",
     endpoint: "https://text.pollinations.ai/openai",
     defaultModel: "openai",
     models: ["openai"],
