@@ -140,14 +140,18 @@ function toast(msg) {
 
 // ---------------- home ----------------
 
-const SAMPLES = [
-  { id: "xiyouji", file: "xiyouji.json", title: "西遊記 ไซอิ๋ว", lang: "จีน", note: "5 ตอน · อภิธานศัพท์ 163 คำ" },
-  { id: "rashomon", file: "rashomon.json", title: "羅生門 ราโชมอน", lang: "ญี่ปุ่น", note: "อาคุตางาวะ · สำนวนเก่า" },
-  { id: "unsu", file: "unsu.json", title: "운수 좋은 날 วันโชคดี", lang: "เกาหลี", note: "ฮยอน จิน-กอน · ภาษาพูด" },
-  { id: "holmes", file: "holmes.json", title: "A Scandal in Bohemia", lang: "อังกฤษ", note: "เชอร์ล็อก โฮมส์ · บทพูดเยอะ" },
+// Same six steps as the user guide (คู่มือการใช้งาน) in Figma.
+const GUIDE = [
+  { t: "ตั้งค่า AI (ฟรี)", d: `ขอ key ฟรีที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> วางในหน้าตั้งค่า AI แล้วกด <b>ทดสอบการเชื่อมต่อ</b>` },
+  { t: "สร้างเรื่อง & ใส่นิยาย", d: "กด <b>+ สร้างโปรเจกต์ใหม่</b> แล้วลากไฟล์ .txt .docx .epub มาวาง หรือวางข้อความ แอปแยกตอนให้เอง" },
+  { t: "ล็อกชื่อ", d: "แท็บ <b>อภิธานศัพท์</b> ใส่ชื่อที่ต้องการ AI จะหาชื่อใหม่แล้วล็อกให้ระหว่างแปล" },
+  { t: "กดแปล", d: "แท็บ <b>ตอน</b> กด <b>แปลที่ยังไม่แปล</b> แล้วเปิดหน้าเว็บค้างไว้จนเสร็จ" },
+  { t: "อ่าน & แก้", d: "แท็บ <b>อ่าน & แก้</b> ถ้ามีกล่องเหลือง <b>ตรวจพบ … จุด</b> กด <b>ให้ AI แก้</b>" },
+  { t: "ส่งออกไฟล์", d: "แท็บ <b>ส่งออก</b> กด <b>Word .docx</b> หรือ <b>E-book .epub</b> และดาวน์โหลดไฟล์สำรองเก็บไว้" },
 ];
 
 function viewHome() {
+  const done = [aiReady(), state.projects.length > 0];
   const list = state.projects.length
     ? `<ul class="projects">${state.projects
         .map(
@@ -156,38 +160,16 @@ function viewHome() {
           <button class="btn sm ghost danger" data-action="delete-project" data-id="${p.id}" aria-label="ลบ ${esc(p.name)}">ลบ</button></li>`,
         )
         .join("")}</ul>`
-    : `<p class="muted">ยังไม่มีโปรเจกต์ เริ่มจากสร้างใหม่ หรือเปิดตัวอย่างด้านล่าง</p>`;
+    : `<p class="muted">ยังไม่มีเรื่อง กด <b>+ สร้างโปรเจกต์ใหม่</b> เพื่อเริ่ม</p>`;
   return `
   <section class="hero">
-    <div>
-      <h1>แปลนิยายด้วย AI<br><em>ชื่อไม่เพี้ยน</em> ทุกตอน</h1>
-      <ul>
-        <li><b>ล็อกชื่อ</b> ตัวละคร สถานที่ วิชา ด้วยอภิธานศัพท์ AI ช่วยหาคำใหม่ให้ทุกตอน</li>
-        <li><b>ตรวจอัตโนมัติ</b> ว่าทุกชื่อแปลตรง ถ้าเพี้ยน AI แก้ให้เอง</li>
-        <li><b>ทีละหลายตอน</b> นำเข้า .txt .docx .epub แยกตอนให้ กดแปลทีเดียว</li>
-        <li><b>หลายภาษา</b> จีน ญี่ปุ่น เกาหลี อังกฤษ เวียดนาม และอื่นๆ</li>
-        <li><b>ใช้ฟรี</b> ด้วย Google Gemini (key ฟรี) หรือแบบไม่ต้องมี key</li>
-      </ul>
-      <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button></div>
-    </div>
-    <div class="demo-pair" aria-label="ตัวอย่างผลแปล">
-      <div class="src">那祖師即命大眾引<mark>孫悟空</mark>出二門外…</div>
-      <div>ปรมาจารย์จึงสั่งให้ศิษย์ทั้งหลายพา<mark class="t">ซุนหงอคง</mark>ออกไปนอกประตูชั้นสอง…</div>
-      <p class="small muted" style="margin:.6em 0 0">ตัวอย่างจริงจาก 西遊記 ตอนที่ 2 แปลด้วย Gemini ฟรี</p>
-    </div>
+    <h1>แปลนิยาย <em>ชื่อไม่เพี้ยน</em></h1>
+    <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button></div>
   </section>
+  <div class="card"><h2>เรื่องของคุณ</h2>${list}</div>
   <div class="card">
-    <h2>เริ่มใช้ใน 3 ขั้น</h2>
-    <ol class="steps">
-      <li><b>ขอ key ฟรี</b> ที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> แล้ววางในหน้า <a href="#" data-action="view" data-view="ai">ตั้งค่า AI</a> (หรือเลือกแบบไม่ต้องมี key ก็ได้ แต่ช้ากว่า)</li>
-      <li><b>สร้างเรื่อง</b> แล้วลากไฟล์นิยายมาวาง โปรแกรมแยกตอนให้เอง เลือกแนวเรื่องในแท็บ “ตั้งค่าเรื่อง”</li>
-      <li><b>กดแปล</b> ระหว่างนั้น AI จะเติมอภิธานศัพท์ให้ คุณแก้ชื่อที่ไม่ชอบได้ แล้วโปรแกรมจะเปลี่ยนในทุกตอนให้ เสร็จแล้วส่งออกเป็น .docx หรือ .epub</li>
-    </ol>
-  </div>
-  <div class="card"><h2>โปรเจกต์ของคุณ</h2>${list}</div>
-  <div class="card">
-    <h2>ลองดูตัวอย่าง (นิยายจริง หมดลิขสิทธิ์แล้ว แปลไว้ให้ดูแล้ว)</h2>
-    <div class="samples">${SAMPLES.map((s) => `<button class="sample" data-action="sample" data-id="${s.id}"><b>${esc(s.title)}</b><span class="badge">${s.lang}</span> <span class="small muted">${esc(s.note)}</span></button>`).join("")}</div>
+    <h2>คู่มือ 6 ขั้น</h2>
+    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${done[i] ? "✓" : i + 1}</span><div><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
   </div>
   <div class="card small muted">
     <h3>เก็บข้อมูลยังไง</h3>
@@ -206,18 +188,6 @@ async function newProjectDialog() {
   store.prefs.set("last", p.id);
   go("chapters");
   toast("สร้างโปรเจกต์แล้ว เพิ่มตอนแรกได้เลย");
-}
-
-async function loadSample(id) {
-  const s = SAMPLES.find((x) => x.id === id);
-  const data = await fetch(`/samples/${s.file}`).then((r) => r.json());
-  const p = { ...blankProject(data.name, data.srcLang), ...data, id: `p${Date.now().toString(36)}` };
-  await store.saveProject(p);
-  await refreshProjects();
-  state.project = p;
-  state.chapterId = p.chapters[0]?.id;
-  go("read");
-  toast("เปิดตัวอย่างแล้ว ลองดูอภิธานศัพท์และคำแปล");
 }
 
 // ---------------- chapters ----------------
@@ -888,7 +858,6 @@ const actions = {
   view: (el) => go(el.dataset.view),
   open: (el) => openProject(el.dataset.id),
   "new-project": newProjectDialog,
-  sample: (el) => loadSample(el.dataset.id).catch((e) => toast(`เปิดตัวอย่างไม่ได้: ${e.message}`)),
   "delete-project": async (el) => {
     const p = state.projects.find((x) => x.id === el.dataset.id);
     if (!confirm(`ลบ “${p?.name}” ออกจากเครื่องนี้? (กู้คืนไม่ได้ ถ้าไม่ได้สำรองไว้)`)) return;
