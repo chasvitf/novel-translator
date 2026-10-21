@@ -176,6 +176,14 @@ function viewHome() {
       <p class="small muted" style="margin:.6em 0 0">ตัวอย่างจริงจาก 西遊記 ตอนที่ 2 แปลด้วย Gemini ฟรี</p>
     </div>
   </section>
+  <div class="card">
+    <h2>เริ่มใช้ใน 3 ขั้น</h2>
+    <ol class="steps">
+      <li><b>ขอ key ฟรี</b> ที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> แล้ววางในหน้า <a href="#" data-action="view" data-view="ai">ตั้งค่า AI</a> (หรือเลือกแบบไม่ต้องมี key ก็ได้ แต่ช้ากว่า)</li>
+      <li><b>สร้างเรื่อง</b> แล้วลากไฟล์นิยายมาวาง โปรแกรมแยกตอนให้เอง เลือกแนวเรื่องในแท็บ “ตั้งค่าเรื่อง”</li>
+      <li><b>กดแปล</b> ระหว่างนั้น AI จะเติมอภิธานศัพท์ให้ คุณแก้ชื่อที่ไม่ชอบได้ แล้วโปรแกรมจะเปลี่ยนในทุกตอนให้ เสร็จแล้วส่งออกเป็น .docx หรือ .epub</li>
+    </ol>
+  </div>
   <div class="card"><h2>โปรเจกต์ของคุณ</h2>${list}</div>
   <div class="card">
     <h2>ลองดูตัวอย่าง (นิยายจริง หมดลิขสิทธิ์แล้ว แปลไว้ให้ดูแล้ว)</h2>
