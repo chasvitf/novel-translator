@@ -104,6 +104,7 @@ export function analyzeSystem(s) {
     "",
     "Terms to list: names of people (also nicknames and titles used as names), places, sects/clans/organizations, martial arts and cultivation techniques, cultivation ranks, magic items and weapons, and other invented terms that must stay consistent across chapters.",
     "Do not list ordinary words. Do not list terms that are already in the KNOWN TERMS list. Use the exact source spelling found in the chapter.",
+    `Give exactly one ${tgt} translation per term, written fully in ${tgt} script (no alternatives separated by \"/\", no source characters left inside).`,
     "List each name on its own: split a chain such as 東京開封府汴梁宣武軍 into its separate place names, and list a person apart from the title in front of them unless the title is part of how they are always called.",
     `For the translation of names: ${nameRule(s)}`,
     `If a name, place or title already has a well-known ${tgt} rendering (from classic published translations or common use), use that rendering.`,

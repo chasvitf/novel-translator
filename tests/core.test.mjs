@@ -125,3 +125,29 @@ test("caller moves to the next model when the daily quota is gone", async (t) =>
   assert.equal(asked.at(-1), "b", "exhausted model is skipped next time");
   assert.ok(new AIError("quota", "x").kind === "quota");
 });
+
+test("a chunk cut off for length is split in half and retried", async () => {
+  const project = { srcLang: "en", tgtLang: "th", genre: "modern", polish: false, autoFix: false, autoTerms: "off", glossary: [], chapters: [] };
+  const para = "word ".repeat(100).trim();
+  const ch = newChapter("c", [para, para, para, para].join("\n\n"));
+  ch.summary = "x";
+  project.chapters.push(ch);
+  const call = async ({ user }) => {
+    const passage = user.split("PASSAGE TO TRANSLATE:")[1];
+    if (passage.length > 1200) throw Object.assign(new AIError("length", "too long"));
+    return { text: "แปลแล้ว" };
+  };
+  await translateChapter(project, ch, { call });
+  assert.equal(ch.translation.split("แปลแล้ว").length - 1, 2, "two halves of two paragraphs each");
+});
+
+test("proposed terms: first alternative only, mixed-script renderings rejected", async () => {
+  const { cleanProposedTarget } = await import("../public/js/lib/glossary.js");
+  assert.equal(cleanProposedTarget("กำนัน / หัวหน้าตำบล", "th"), "กำนัน");
+  assert.equal(cleanProposedTarget("ประตูทง소문", "th"), "");
+  assert.equal(cleanProposedTarget("“นายคิม”", "th"), "นายคิม");
+  assert.equal(cleanProposedTarget("孫悟空", "ja"), "孫悟空");
+  const g = [];
+  mergeTerms(g, [{ source: "동소문", target: "ประตูทง소문" }, { source: "chánh tổng", target: "กำนัน / หัวหน้าตำบล" }], "locked", "th");
+  assert.deepEqual(g.map((e) => [e.source, e.target]), [["chánh tổng", "กำนัน"]]);
+});

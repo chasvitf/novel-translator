@@ -39,7 +39,26 @@ export async function analyzeChapter(project, chapter, call, signal) {
   return { title: String(data.title || "").trim(), summary: String(data.summary || "").trim(), terms };
 }
 
+// A reply cut off for length means the chunk was too big for this model: halve it and go again.
 export async function translateChunk(project, src, previous, summary, call, signal, onStep) {
+  try {
+    return await translateOne(project, src, previous, summary, call, signal, onStep);
+  } catch (e) {
+    if (e.kind !== "length" || src.length < 400) throw e;
+    const halves = chunkText(src, Math.ceil(src.length / 2));
+    if (halves.length < 2) throw e;
+    const parts = [];
+    for (const h of halves) {
+      parts.push(await translateChunk(project, h, previous, summary, call, signal, onStep));
+      previous = tail(parts.at(-1).out);
+    }
+    const join = (k) => parts.map((x) => x[k]).join("\n\n");
+    const issues = { missing: parts.flatMap((x) => x.issues.missing), leftovers: parts.flatMap((x) => x.issues.leftovers) };
+    return { src, draft: join("draft"), out: join("out"), issues: { ...issues, ok: !issues.missing.length && !issues.leftovers.length } };
+  }
+}
+
+async function translateOne(project, src, previous, summary, call, signal, onStep) {
   const entries = relevantEntries(project.glossary, src);
   onStep?.("translate");
   let out = P.cleanReply((await call({ system: P.translateSystem(project), user: P.translateUser({ chunk: src, entries, summary, previous }), signal })).text);
@@ -69,7 +88,7 @@ export async function translateChapter(project, chapter, { call, onProgress = ()
         chapter.titleT = a.title || chapter.titleT;
         chapter.summary = a.summary || chapter.summary;
         if (project.autoTerms !== "off") {
-          const added = mergeTerms(project.glossary, a.terms, project.autoTerms === "auto" ? "locked" : "pending");
+          const added = mergeTerms(project.glossary, a.terms, project.autoTerms === "auto" ? "locked" : "pending", project.tgtLang);
           onProgress({ step: "terms", added });
         }
       } catch (e) {

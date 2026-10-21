@@ -77,7 +77,7 @@ export const PROVIDERS = {
 export class AIError extends Error {
   constructor(kind, message, retryAfterMs = 0) {
     super(message);
-    this.kind = kind; // rate | quota | auth | blocked | network | bad
+    this.kind = kind; // rate | quota | auth | blocked | network | length | bad
     this.retryAfterMs = retryAfterMs;
   }
 }
@@ -144,7 +144,7 @@ async function gemini(cfg, { system, user, json, signal }) {
   const cand = d.candidates?.[0];
   const text = (cand?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
   if (!text) throw new AIError(cand?.finishReason === "SAFETY" || cand?.finishReason === "PROHIBITED_CONTENT" ? "blocked" : "bad", `Gemini ตอบว่างเปล่า (${cand?.finishReason || "ไม่ทราบสาเหตุ"})`);
-  if (cand.finishReason === "MAX_TOKENS") throw new AIError("bad", "คำตอบยาวเกินกำหนด ลองลดขนาดท่อนในการตั้งค่า");
+  if (cand.finishReason === "MAX_TOKENS") throw new AIError("length", "คำตอบยาวเกินที่ AI ตอบได้ในครั้งเดียว");
   return { text, usage: d.usageMetadata?.totalTokenCount || 0 };
 }
 
@@ -185,13 +185,16 @@ async function compat(cfg, { system, user, json, signal }) {
   // Reasoning models on OpenAI reject a custom temperature.
   if (cfg.provider !== "openai") body.temperature = json ? 0.2 : 0.7;
   if (json && cfg.provider !== "pollinations") body.response_format = { type: "json_object" };
+  // Pollinations' "openai" is a reasoning model: with default effort it can spend the whole budget thinking.
+  if (cfg.provider === "pollinations") Object.assign(body, { reasoning_effort: "low", max_tokens: 16000 });
   const d = await post(compatUrl(p, cfg), headers, body, signal);
   if (typeof d === "string") return { text: d, usage: 0 };
   const choice = d.choices?.[0];
   let text = choice?.message?.content || "";
   text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(); // qwen/deepseek reasoning traces
+  if (!text && choice?.finish_reason === "length") throw new AIError("length", "คำตอบยาวเกินที่ AI ตอบได้ในครั้งเดียว");
   if (!text) throw new AIError(choice?.finish_reason === "content_filter" ? "blocked" : "bad", `AI ตอบว่างเปล่า (${choice?.finish_reason || "ไม่ทราบสาเหตุ"})`);
-  if (choice.finish_reason === "length") throw new AIError("bad", "คำตอบยาวเกินกำหนด ลองลดขนาดท่อนในการตั้งค่า");
+  if (choice.finish_reason === "length") throw new AIError("length", "คำตอบยาวเกินที่ AI ตอบได้ในครั้งเดียว");
   return { text, usage: d.usage?.total_tokens || 0 };
 }
 
@@ -246,7 +249,7 @@ async function anthropic(cfg, { system, user, json, signal }) {
     throw anthropicError(Anthropic, e);
   }
   if (msg.stop_reason === "refusal") throw new AIError("blocked", "Claude ไม่ยอมแปลท่อนนี้");
-  if (msg.stop_reason === "max_tokens") throw new AIError("bad", "คำตอบยาวเกินกำหนด ลองลดขนาดท่อนในการตั้งค่า");
+  if (msg.stop_reason === "max_tokens") throw new AIError("length", "คำตอบยาวเกินที่ AI ตอบได้ในครั้งเดียว");
   const text = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("");
   return { text, usage: (msg.usage?.input_tokens || 0) + (msg.usage?.output_tokens || 0) };
 }
