@@ -163,13 +163,18 @@ function viewHome() {
     : `<p class="muted">ยังไม่มีเรื่อง กด <b>+ สร้างโปรเจกต์ใหม่</b> เพื่อเริ่ม</p>`;
   return `
   <section class="hero">
-    <h1>แปลนิยาย <em>ชื่อไม่เพี้ยน</em></h1>
-    <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button></div>
+    <div>
+      <p class="eyebrow">NOVEL LOCK</p>
+      <h1>แปลนิยาย <em>ชื่อไม่เพี้ยน</em></h1>
+      <p class="lede">แปลนิยายต่างประเทศเป็นภาษาไทย ทำตามคู่มือด้านล่าง 6 ขั้นจบ</p>
+      <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button></div>
+    </div>
+    <img class="hero-logo" src="/favicon.svg" alt="" width="200" height="200">
   </section>
   <div class="card"><h2>เรื่องของคุณ</h2>${list}</div>
   <div class="card">
     <h2>คู่มือ 6 ขั้น</h2>
-    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${done[i] ? "✓" : i + 1}</span><div><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
+    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${done[i] ? "✓" : i + 1}</span><div><small class="step-of">ขั้นที่ ${i + 1} จาก 6</small><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
   </div>
   <div class="card small muted">
     <h3>เก็บข้อมูลยังไง</h3>
