@@ -5,3 +5,4 @@ corpus/out/
 corpus/vi-*
 .vercel
 .DS_Store
+.env*
