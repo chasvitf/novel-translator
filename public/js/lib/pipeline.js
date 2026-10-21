@@ -39,12 +39,13 @@ export async function analyzeChapter(project, chapter, call, signal) {
   return { title: String(data.title || "").trim(), summary: String(data.summary || "").trim(), terms };
 }
 
-// A reply cut off for length means the chunk was too big for this model: halve it and go again.
+// A reply cut off for length means the chunk was too big for this model, and a safety refusal from
+// every model usually comes from the passage as a whole: in both cases halve it and go again.
 export async function translateChunk(project, src, previous, summary, call, signal, onStep) {
   try {
     return await translateOne(project, src, previous, summary, call, signal, onStep);
   } catch (e) {
-    if (e.kind !== "length" || src.length < 400) throw e;
+    if (!(e.kind === "length" || e.kind === "blocked") || src.length < 300) throw e;
     const halves = chunkText(src, Math.ceil(src.length / 2));
     if (halves.length < 2) throw e;
     const parts = [];
@@ -69,7 +70,8 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
     out = P.cleanReply((await call({ system: P.polishSystem(project), user: P.polishUser({ chunk: src, draft: out, entries }), signal })).text);
   }
   let issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
-  for (let round = 0; !issues.ok && project.autoFix && round < 2; round++) {
+  // Up to 3 fix rounds while each one still helps (a list of ten names can take more than one).
+  for (let round = 0; !issues.ok && project.autoFix && round < 3; round++) {
     onStep?.("fix", issues);
     let fixed;
     try {
@@ -80,7 +82,7 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
       throw e;
     }
     const after = checkTranslation(src, fixed, entries, project.srcLang, project.tgtLang);
-    if (score(after) > score(issues)) break; // the "fix" made it worse
+    if (!acceptFix(out, fixed, issues, after)) break;
     out = fixed;
     issues = after;
   }
@@ -89,6 +91,15 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
 
 // Translates one chapter in place. `onProgress({step, chunk, total, added})`.
 const score = (issues) => issues.missing.length + issues.leftovers.length;
+
+// Take a "fixed" version only if it has fewer problems and is still the same text. A small model once
+// answered a fix request by pasting the Chinese source back into the Thai translation.
+export function acceptFix(before, after, issuesBefore, issuesAfter) {
+  if (score(issuesAfter) >= score(issuesBefore)) return false;
+  if (issuesAfter.leftovers.some((t) => !issuesBefore.leftovers.includes(t))) return false; // new garbage
+  const ratio = after.length / Math.max(1, before.length);
+  return ratio > 0.8 && ratio < 1.25;
+}
 
 export async function translateChapter(project, chapter, { call, onProgress = () => {}, signal } = {}) {
   chapter.status = "working";
@@ -158,11 +169,24 @@ export async function fixChapter(project, chapter, { call, signal, onProgress = 
   for (let i = 0; i < pieces.length; i++) {
     const c = pieces[i];
     const entries = relevantEntries(project.glossary, c.src);
-    const issues = checkTranslation(c.src, c.out, entries, project.srcLang, project.tgtLang);
-    if (issues.ok) continue;
-    onProgress({ step: "fix", chunk: i, total: pieces.length });
-    c.out = P.cleanReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: c.src, draft: c.out, entries, issues }), signal })).text);
-    c.issues = checkTranslation(c.src, c.out, entries, project.srcLang, project.tgtLang);
+    // Two tries per chunk: a rejected attempt (worse, or new garbage) often succeeds the second time.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const issues = checkTranslation(c.src, c.out, entries, project.srcLang, project.tgtLang);
+      if (issues.ok) break;
+      onProgress({ step: "fix", chunk: i, total: pieces.length, issues });
+      let fixed;
+      try {
+        fixed = P.cleanReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: c.src, draft: c.out, entries, issues }), signal })).text);
+      } catch (e) {
+        if (e.kind === "blocked" || e.kind === "bad" || e.kind === "length") break;
+        throw e;
+      }
+      const after = checkTranslation(c.src, fixed, entries, project.srcLang, project.tgtLang);
+      if (acceptFix(c.out, fixed, issues, after)) {
+        c.out = fixed;
+        c.issues = after;
+      }
+    }
   }
   chapter.translation = pieces.map((c) => c.out).join("\n\n");
   if (inSync) chapter.chunks = pieces;

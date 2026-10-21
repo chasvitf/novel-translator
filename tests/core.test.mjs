@@ -179,3 +179,26 @@ test("stray English words in a Thai translation are flagged unless the source ha
   assert.ok(checkTranslation("He said OK to Holmes", "เขาบอก OK กับ Holmes", [], "en", "th").ok);
   assert.ok(checkTranslation("x", "Watson", [makeEntry({ source: "华生", target: "Watson" })], "zh", "th").ok);
 });
+
+test("letters from any script the target does not use are leaks; asides in proposed terms are dropped", async () => {
+  const { cleanProposedTarget } = await import("../public/js/lib/glossary.js");
+  assert.deepEqual(checkTranslation("御馬監", "กรมอัศతรสวรรค์", [], "zh", "th").leftovers, ["త"]);
+  assert.equal(cleanProposedTarget("กรมอัศతรสวรรค์", "th"), "");
+  assert.equal(cleanProposedTarget("ท้าวตั๋วหลัวหลี่ (ท้าวเวสสุวรรณ", "th"), "ท้าวตั๋วหลัวหลี่");
+  assert.ok(checkTranslation("x", "Привет мир", [], "en", "ru").ok);
+  assert.ok(checkTranslation("x", "Tôi là mèo", [], "ja", "vi").ok);
+});
+
+test("a fix is accepted only if it reduces problems and keeps the text's length", async () => {
+  const { acceptFix } = await import("../public/js/lib/pipeline.js");
+  const two = { missing: [1], leftovers: ["x"] };
+  const one = { missing: [], leftovers: ["x"] };
+  assert.ok(acceptFix("a".repeat(100), "b".repeat(105), two, one));
+  assert.ok(!acceptFix("a".repeat(100), "b".repeat(100), one, one), "no improvement");
+  assert.ok(!acceptFix("a".repeat(100), "b".repeat(160), two, one), "grew too much");
+});
+
+test("a fix that brings in new garbage is rejected", async () => {
+  const { acceptFix } = await import("../public/js/lib/pipeline.js");
+  assert.ok(!acceptFix("a".repeat(100), "b".repeat(100), { missing: [1, 2, 3], leftovers: [] }, { missing: [], leftovers: ["را"] }));
+});

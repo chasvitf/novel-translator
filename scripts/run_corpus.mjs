@@ -20,6 +20,8 @@ fs.mkdirSync(outDir, { recursive: true });
 // Books: chapters of one book share a project (and so a glossary) to test consistency across chapters.
 const books = {
   xiyouji: { genre: "xianxia", nameStyle: "hokkien", files: ["zh-xiyouji-01.txt", "zh-xiyouji-02.txt"] },
+  // Chapters 3-5 continue the demo sample (its glossary and summaries) to test consistency over many chapters.
+  xiyouji35: { continueFrom: "public/samples/xiyouji.json", files: ["zh-xiyouji-03.txt", "zh-xiyouji-04.txt", "zh-xiyouji-05.txt"] },
   shuihu: { genre: "wuxia", nameStyle: "mandarin", files: ["zh-shuihu-02.txt"] },
   rashomon: { genre: "classic", files: ["ja-rashomon.txt"] },
   neko: { genre: "classic", files: ["ja-neko-01.txt"] },
@@ -40,12 +42,18 @@ const used = {};
 const call = async (req) => { calls++; const r = await base(req); tokens += r.usage; used[r.model] = (used[r.model] || 0) + 1; return r; };
 
 const report = [];
+const startGlossary = {};
 for (const [name, book] of Object.entries(books)) {
   if (only.length && !only.some((o) => name.includes(o) || book.files.some((f) => f.includes(o)))) continue;
   const first = fs.readFileSync(path.join(root, "corpus", book.files[0]), "utf8");
   const project = { name, srcLang: detectLang(first), tgtLang: "th", genre: book.genre, nameStyle: book.nameStyle, custom: "", polish: process.env.POLISH === "1", autoFix: true, autoTerms: "auto", glossary: [], chapters: [] };
   project.chapters = book.files.map((f) => newChapter(f.replace(".txt", ""), fs.readFileSync(path.join(root, "corpus", f), "utf8")));
-  for (const ch of project.chapters) {
+  let todo = project.chapters;
+  if (book.continueFrom) {
+    const prev = JSON.parse(fs.readFileSync(path.join(root, book.continueFrom), "utf8"));
+    Object.assign(project, { genre: prev.genre, nameStyle: prev.nameStyle, glossary: prev.glossary, chapters: [...prev.chapters, ...project.chapters] });
+  }
+  for (const ch of todo) {
     const t0 = Date.now();
     console.log(`▶ ${ch.title} (${project.srcLang}, ${ch.text.length} chars)`);
     await translateChapter(project, ch, { call, onProgress: (p) => p.step === "terms" ? console.log(`   + ${p.added.length} terms`) : p.step === "warn" ? console.log("   ! " + p.message) : p.step === "fix" ? console.log(`   fix chunk ${p.chunk + 1}: ${[...p.issues.missing.map((m) => m.entry.source + "→" + m.entry.target), ...p.issues.leftovers].join(", ")}`) : null });

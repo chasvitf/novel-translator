@@ -103,6 +103,7 @@ export function analyzeSystem(s) {
     "Return JSON only, with this shape:",
     `{"title": "<the chapter title translated into ${tgt}, or empty>", "terms": [{"source": "<exact text as it appears in the chapter>", "target": "<${tgt} translation>", "type": "person|place|skill|org|item|title|other", "note": "<short ${tgt} note: gender, role, relationships, how others address them>"}], "summary": "<${tgt} summary of this chapter in at most 120 words: who appears, where, what happens, how the main characters address each other>"}`,
     "",
+    "List at most 40 terms, the most important first.",
     "Terms to list: names of people (also nicknames and titles used as names), places, sects/clans/organizations, martial arts and cultivation techniques, cultivation ranks, magic items and weapons, and other invented terms that must stay consistent across chapters.",
     "Do not list ordinary words. Do not list terms that are already in the KNOWN TERMS list. Use the exact source spelling found in the chapter.",
     `Give exactly one ${tgt} translation per term, written fully in ${tgt} script (no alternatives separated by \"/\", no source characters left inside).`,
