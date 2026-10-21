@@ -28,7 +28,8 @@ const state = {
 const DEFAULT_AI = { provider: "gemini", model: PROVIDERS.gemini.defaultModel, keys: {}, base: "", fallback: true, models: {} };
 const ai = () => ({ ...DEFAULT_AI, ...store.prefs.get("ai", {}) });
 const saveAI = (patch) => store.prefs.set("ai", { ...ai(), ...patch });
-const today = () => new Date().toISOString().slice(0, 10);
+// Gemini free quotas reset at midnight Pacific time.
+const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 const exhaustedSet = () => new Set(store.prefs.get(`exhausted:${today()}`, []));
 
 function aiConfig() {
@@ -468,7 +469,7 @@ function viewRead() {
     <span class="grow"></span>
     <button class="btn" data-action="translate-one" data-id="${c.id}" ${busy() ? "disabled" : ""}>${c.translation ? "แปลตอนนี้ใหม่" : "แปลตอนนี้"}</button>
   </div>
-  ${p.credit ? `<p class="small muted">ต้นฉบับ: ${esc(p.credit)}</p>` : ""}
+  ${p.credit || c.models?.length ? `<p class="small muted">${p.credit ? `ต้นฉบับ: ${esc(p.credit)}` : ""}${p.credit && c.models?.length ? " · " : ""}${c.models?.length ? `แปลด้วย ${esc(c.models.join(", "))}` : ""}</p>` : ""}
   ${issueBox}
   ${c.summary ? `<p class="summary"><b>เรื่องย่อตอนนี้</b> (AI ใช้เป็นบริบทของตอนถัดไป): ${esc(c.summary)}</p>` : ""}
   <div class="reader">
@@ -713,6 +714,7 @@ function viewAI() {
     </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aiFallback" ${a.fallback ? "checked" : ""}><span>สลับไปโมเดลอื่นอัตโนมัติเมื่อโควตาฟรีของโมเดลนี้หมด <span class="small muted">(${esc((aiConfig().fallbackModels || []).join(" → ") || "-")})</span></span></label>
     <div class="row" style="margin-top:12px"><button class="btn primary" data-action="test-ai">ทดสอบการเชื่อมต่อ</button><span id="aiTest" class="small"></span></div>
+    ${exhaustedSet().size ? `<p class="small muted" style="margin:10px 0 0">โควตาฟรีวันนี้หมดแล้ว: ${esc([...exhaustedSet()].map((k) => k.split("/").slice(1).join("/")).join(", "))} · <a href="#" data-action="reset-quota">ล้าง (ถ้าโควตารีเซ็ตแล้ว)</a></p>` : ""}
   </div>
   <div class="card small muted">key เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น และส่งตรงไปที่ ${esc(p.name)} · ถ้าใช้เครื่องคนอื่น กดล้าง key ก่อนออก <button class="btn sm" data-action="clear-key">ล้าง key</button></div>
   ${state.project ? `<div class="row end"><button class="btn" data-action="view" data-view="chapters">กลับไปที่ตอน ›</button></div>` : `<div class="row end"><button class="btn" data-action="home">กลับหน้าแรก ›</button></div>`}`;
@@ -951,6 +953,10 @@ const actions = {
     saveAI({ keys: { ...a.keys, [a.provider]: "" } });
     render();
     toast("ล้าง key แล้ว");
+  },
+  "reset-quota": () => {
+    store.prefs.set(`exhausted:${today()}`, []);
+    render();
   },
   stop: () => state.run?.abort.abort(),
   "close-runner": () => {

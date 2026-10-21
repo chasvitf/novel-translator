@@ -61,7 +61,8 @@ export async function translateChunk(project, src, previous, summary, call, sign
 async function translateOne(project, src, previous, summary, call, signal, onStep) {
   const entries = relevantEntries(project.glossary, src);
   onStep?.("translate");
-  let out = P.cleanReply((await call({ system: P.translateSystem(project), user: P.translateUser({ chunk: src, entries, summary, previous }), signal })).text);
+  const first = await call({ system: P.translateSystem(project), user: P.translateUser({ chunk: src, entries, summary, previous }), signal });
+  let out = P.cleanReply(first.text);
   const draft = out;
   if (project.polish) {
     onStep?.("polish");
@@ -83,7 +84,7 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
     out = fixed;
     issues = after;
   }
-  return { src, draft, out, issues };
+  return { src, draft, out, issues, model: first.model };
 }
 
 // Translates one chapter in place. `onProgress({step, chunk, total, added})`.
@@ -121,6 +122,7 @@ export async function translateChapter(project, chapter, { call, onProgress = ()
     chapter.chunks = chunks;
     chapter.translation = chunks.map((c) => c.out).join("\n\n");
     chapter.issues = mergeIssues(chunks.map((c) => c.issues));
+    chapter.models = [...new Set(chunks.map((c) => c.model).filter(Boolean))];
     chapter.status = "done";
     chapter.translatedAt = Date.now();
     onProgress({ step: "done" });

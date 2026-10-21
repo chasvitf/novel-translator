@@ -29,7 +29,7 @@ const books = {
 };
 
 let calls = 0, tokens = 0;
-const exhaustedFile = path.join(root, "corpus", "out", `exhausted-${new Date().toISOString().slice(0, 10)}.json`);
+const exhaustedFile = path.join(root, "corpus", "out", `exhausted-${new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" })}.json`);
 const exhausted = new Set(fs.existsSync(exhaustedFile) ? JSON.parse(fs.readFileSync(exhaustedFile, "utf8")) : []);
 const base = createCaller({ provider, model, key, fallbackModels: PROVIDERS[provider].models }, {
   exhausted,
