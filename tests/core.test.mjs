@@ -151,3 +151,10 @@ test("proposed terms: first alternative only, mixed-script renderings rejected",
   mergeTerms(g, [{ source: "동소문", target: "ประตูทง소문" }, { source: "chánh tổng", target: "กำนัน / หัวหน้าตำบล" }], "locked", "th");
   assert.deepEqual(g.map((e) => [e.source, e.target]), [["chánh tổng", "กำนัน"]]);
 });
+
+test("leftover check catches stray characters from any foreign script", () => {
+  const r = checkTranslation("揉烏帽子", "หมวกโมมิเอ보ชิ", [], "ja", "th");
+  assert.deepEqual(r.leftovers, ["보"]);
+  assert.ok(checkTranslation("x", "ข้อความ “ไทย” ล้วน", [], "en", "th").ok);
+  assert.ok(checkTranslation("林動", "林動は", [], "zh", "ja").ok, "kanji and kana are fine in Japanese");
+});

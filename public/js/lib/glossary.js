@@ -73,15 +73,28 @@ export function relevantEntries(entries, text) {
   return entries.filter((e) => counts.has(e.id)).sort((a, b) => b.source.length - a.source.length);
 }
 
-const SCRIPT_RUNS = {
-  zh: /[一-鿿㐀-䶿]{2,}/g,
-  ja: /[぀-ヿ一-鿿]{2,}/g,
-  ko: /[가-힯]{2,}/g,
-  ru: /[Ѐ-ӿ]{3,}/g,
+// Scripts that should not appear in a translation into a given language. Models occasionally leak
+// a character from an unrelated script too (a Hangul syllable inside a Japanese→Thai name), so all are checked.
+const SCRIPTS = {
+  han: /[\u4e00-\u9fff\u3400-\u4dbf]+/g,
+  kana: /[\u3040-\u30ff]+/g,
+  hangul: /[\uac00-\ud7af\u1100-\u11ff]+/g,
+  cyrillic: /[\u0400-\u04ff]{3,}/g,
 };
+const ALLOWED = { zh: ["han"], ja: ["han", "kana"], ko: ["hangul", "han"], ru: ["cyrillic"] };
+
+function foreignRuns(text, tgtLang) {
+  const allowed = ALLOWED[tgtLang] || [];
+  const out = new Set();
+  for (const [name, re] of Object.entries(SCRIPTS)) {
+    if (allowed.includes(name)) continue;
+    for (const m of text.match(re) || []) out.add(m);
+  }
+  return [...out];
+}
 
 // Compare a translation with its source: locked terms that did not come through,
-// and runs of source script left untranslated.
+// and runs of foreign script left in the text.
 export function checkTranslation(source, translated, entries, srcLang, tgtLang) {
   const used = relevantEntries(entries, source);
   const srcCounts = countInText(used, source);
@@ -92,11 +105,7 @@ export function checkTranslation(source, translated, entries, srcLang, tgtLang) 
     const found = isLatin(e.target) ? occurrences(translated, e.target).length : lower.split(e.target.toLowerCase()).length - 1;
     if (found === 0) missing.push({ entry: e, expected: srcCounts.get(e.id) || 1 });
   }
-  let leftovers = [];
-  const re = SCRIPT_RUNS[srcLang];
-  if (re && srcLang !== tgtLang && !(srcLang === "zh" && tgtLang === "ja")) {
-    leftovers = [...new Set(translated.match(re) || [])];
-  }
+  const leftovers = srcLang === tgtLang ? [] : foreignRuns(translated, tgtLang);
   return { missing, leftovers, ok: missing.length === 0 && leftovers.length === 0 };
 }
 
