@@ -9,7 +9,7 @@ export const PROVIDERS = {
     keyHelp: "เข้า aistudio.google.com/apikey → Create API key (ฟรี ไม่ต้องผูกบัตร)",
     defaultModel: "gemini-3.5-flash",
     // Free tier: about 20 requests per day per model, so the caller moves down this list as each runs out.
-    models: ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemma-4-31b-it"],
+    models: ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemma-4-31b-it", "gemma-4-26b-a4b-it"],
     minIntervalMs: 4500,
     tested: true,
   },

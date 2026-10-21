@@ -9,7 +9,7 @@ const env = Object.fromEntries(fs.readFileSync(path.join(root, ".env"), "utf8").
 const [id, model = "gemini-3.1-flash-lite"] = process.argv.slice(2);
 const file = path.join(root, "public", "samples", `${id}.json`);
 const p = JSON.parse(fs.readFileSync(file, "utf8"));
-const day = new Date().toISOString().slice(0, 10);
+const day = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 const exFile = path.join(root, "corpus", "out", `exhausted-${day}.json`);
 const exhausted = new Set(fs.existsSync(exFile) ? JSON.parse(fs.readFileSync(exFile, "utf8")) : []);
 const call = createCaller({ provider: "gemini", model, key: env.GEMINI_API_KEY, fallbackModels: PROVIDERS.gemini.models }, { exhausted });
