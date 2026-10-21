@@ -103,3 +103,12 @@ export const NAME_STYLES = {
 // Default chunk size in source characters: dense scripts carry more meaning per character.
 // Large chunks keep the number of requests low, which matters on free daily quotas.
 export const chunkSizeFor = (code) => (langByCode(code).cjk ? 3000 : 8000);
+
+// Source-language pitfalls the translator prompt warns about (written for a Thai target, still useful otherwise).
+export const LANG_NOTES = {
+  zh: "Chinese narration formulas (話說, 且說, 卻說, 只見, 但見) become natural Thai openers such as กล่าวถึง / ฝ่าย / เห็นแต่; the chapter-end formula 且聽下回分解 becomes โปรดติดตามตอนต่อไป. Translate four-character idioms by meaning, not word by word. Poems stay as verse lines.",
+  ja: "Japanese often drops the subject: add one in the translation only where the reader needs it. Map first-person pronouns by register and keep them fixed per character: 私→ฉัน/ผม, 僕→ผม, 俺→ข้า/ฉัน, あたし→ฉัน, 吾輩/余/拙者→ข้าพเจ้า. Show sentence-final particles' tone with Thai particles only where natural. Keep onomatopoeia vivid.",
+  ko: "Korean speech levels decide politeness: 존댓말 lines get Thai polite endings (ครับ/ค่ะ/นะคะ) fitting the speaker's gender, 반말 lines get none. Dialect or rough speech should sound rough in Thai too. Kinship terms used as address follow the address setting.",
+  vi: "Vietnamese pronouns are kinship terms (anh, chị, em, ông, bà, cô, chú, bác, mày, tao): pick the Thai term that matches the relationship (พี่, น้อง, ลุง, ป้า, ตา, ยาย, มึง/กู for insults) and keep it consistent for each pair of characters. Village titles (lý trưởng, chánh tổng) become Thai village office titles.",
+  en: "Do not follow English word order: restructure into natural target sentences, split long sentences, translate idioms by meaning, and render dialogue tags (he said) naturally rather than literally every time.",
+};

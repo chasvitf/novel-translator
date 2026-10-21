@@ -69,14 +69,26 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
   }
   let issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
   for (let round = 0; !issues.ok && project.autoFix && round < 2; round++) {
-    onStep?.("fix");
-    out = P.cleanReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: src, draft: out, entries, issues }), signal })).text);
-    issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
+    onStep?.("fix", issues);
+    let fixed;
+    try {
+      fixed = P.cleanReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: src, draft: out, entries, issues }), signal })).text);
+    } catch (e) {
+      // A refused or failed fix keeps the translation we already have; the issues stay listed for the user.
+      if (e.kind === "blocked" || e.kind === "bad" || e.kind === "length") break;
+      throw e;
+    }
+    const after = checkTranslation(src, fixed, entries, project.srcLang, project.tgtLang);
+    if (score(after) > score(issues)) break; // the "fix" made it worse
+    out = fixed;
+    issues = after;
   }
   return { src, draft, out, issues };
 }
 
 // Translates one chapter in place. `onProgress({step, chunk, total, added})`.
+const score = (issues) => issues.missing.length + issues.leftovers.length;
+
 export async function translateChapter(project, chapter, { call, onProgress = () => {}, signal } = {}) {
   chapter.status = "working";
   chapter.error = "";
@@ -102,7 +114,7 @@ export async function translateChapter(project, chapter, { call, onProgress = ()
     let previous = previousTail(project, chapter);
     const chunks = [];
     for (let i = 0; i < pieces.length; i++) {
-      const c = await translateChunk(project, pieces[i], previous, summary, call, signal, (step) => onProgress({ step, chunk: i, total: pieces.length }));
+      const c = await translateChunk(project, pieces[i], previous, summary, call, signal, (step, issues) => onProgress({ step, chunk: i, total: pieces.length, issues }));
       chunks.push(c);
       previous = tail(c.out);
     }
