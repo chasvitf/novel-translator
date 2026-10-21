@@ -202,3 +202,20 @@ test("a fix that brings in new garbage is rejected", async () => {
   const { acceptFix } = await import("../public/js/lib/pipeline.js");
   assert.ok(!acceptFix("a".repeat(100), "b".repeat(100), { missing: [1, 2, 3], leftovers: [] }, { missing: [], leftovers: ["را"] }));
 });
+
+test("an overloaded model is passed over on the next calls instead of being retried first", async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => (globalThis.fetch = realFetch));
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const m = String(url).match(/models\/([^:]+)/)[1];
+    asked.push(m);
+    if (m === "a") return new Response(JSON.stringify({ error: { code: 503, message: "The model is overloaded" } }), { status: 503 });
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: `ok-${m}` }] }, finishReason: "STOP" }] }), { status: 200 });
+  };
+  const call = createCaller({ provider: "gemini", key: "k", model: "a", fallbackModels: ["a", "b"], minIntervalMs: 0 });
+  assert.equal((await call({ system: "s", user: "u" })).text, "ok-b");
+  const before = asked.length;
+  assert.equal((await call({ system: "s", user: "u" })).text, "ok-b");
+  assert.deepEqual(asked.slice(before), ["b"], "second call goes straight to b");
+});
