@@ -100,12 +100,26 @@ export function checkTranslation(source, translated, entries, srcLang, tgtLang) 
   return { missing, leftovers, ok: missing.length === 0 && leftovers.length === 0 };
 }
 
+const FOREIGN = { ko: /[\uac00-\ud7af\u1100-\u11ff]/, ja: /[\u3040-\u30ff]/, zh: /[\u4e00-\u9fff]/ };
+
+// Clean up a translation proposed by the AI: keep the first of "A / B" alternatives, and reject
+// renderings that still carry source script (e.g. "ประตูทง소문"), which would be locked in for good.
+export function cleanProposedTarget(target, tgtLang) {
+  let t = String(target ?? "").trim();
+  t = t.split(/\s*[\/／|]\s*|\s+(?:or|หรือ)\s+/)[0].replace(/^["“'‘(（]+|["”'’)）]+$/g, "").trim();
+  for (const [lang, re] of Object.entries(FOREIGN)) {
+    if (lang === tgtLang || (lang === "zh" && tgtLang === "ja")) continue;
+    if (re.test(t)) return "";
+  }
+  return t;
+}
+
 // Add proposed terms whose source is not in the glossary yet. Returns the entries added.
-export function mergeTerms(glossary, proposed, status) {
+export function mergeTerms(glossary, proposed, status, tgtLang = "th") {
   const known = new Set(glossary.map((e) => e.source));
   const added = [];
   for (const p of proposed || []) {
-    const e = makeEntry({ ...p, status });
+    const e = makeEntry({ ...p, target: cleanProposedTarget(p?.target, tgtLang), status });
     if (!e.source || !e.target || known.has(e.source)) continue;
     if (e.source.length > 40 || e.target.length > 60) continue;
     known.add(e.source);
