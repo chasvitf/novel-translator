@@ -25,7 +25,7 @@ const state = {
 
 // ---------------- AI settings (per device) ----------------
 
-const DEFAULT_AI = { provider: "gemini", model: PROVIDERS.gemini.defaultModel, keys: {}, base: "", fallback: true, models: {} };
+const DEFAULT_AI = { provider: "gemini", model: PROVIDERS.gemini.defaultModel, keys: {}, base: "", fallback: true, models: {}, parallel: 1, paid: false };
 const ai = () => ({ ...DEFAULT_AI, ...store.prefs.get("ai", {}) });
 const saveAI = (patch) => store.prefs.set("ai", { ...ai(), ...patch });
 // Gemini free quotas reset at midnight Pacific time.
@@ -36,7 +36,8 @@ function aiConfig() {
   const a = ai();
   const p = PROVIDERS[a.provider];
   const fallbackModels = a.fallback ? (a.models[a.provider]?.length ? orderFallbacks(a.provider, a.models[a.provider]) : p.models) : [];
-  return { provider: a.provider, model: a.model || p.defaultModel, key: a.keys[a.provider] || "", base: a.base, fallbackModels };
+  // A paid key has no free-tier spacing to respect; keep a small gap so bursts don't trip rate limits.
+  return { provider: a.provider, model: a.model || p.defaultModel, key: a.keys[a.provider] || "", base: a.base, fallbackModels, ...(a.paid ? { minIntervalMs: 300 } : {}) };
 }
 
 // Prefer the curated order, then whatever else the account lists.
@@ -145,10 +146,9 @@ function toast(msg) {
 // Same six steps as the user guide (คู่มือการใช้งาน) in Figma.
 const GUIDE = [
   { t: "ตั้งค่า AI (ฟรี)", d: `ขอ key ฟรีที่ <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> วางในหน้าตั้งค่า AI แล้วกด <b>ทดสอบการเชื่อมต่อ</b>` },
-  { t: "สร้างเรื่อง & ใส่นิยาย", d: "กด <b>+ สร้างโปรเจกต์ใหม่</b> แล้วลากไฟล์ .txt .docx .epub มาวาง หรือวางข้อความ แอปแยกตอนให้เอง" },
-  { t: "ล็อกชื่อ", d: "แท็บ <b>อภิธานศัพท์</b> ใส่ชื่อที่ต้องการ AI จะหาชื่อใหม่แล้วล็อกให้ระหว่างแปล" },
-  { t: "กดแปล", d: "แท็บ <b>ตอน</b> กด <b>แปลที่ยังไม่แปล</b> แล้วเปิดหน้าเว็บค้างไว้จนเสร็จ" },
-  { t: "อ่าน & แก้", d: "แท็บ <b>อ่าน</b> อ่านคำแปลเต็มหน้า · แท็บ <b>อ่าน & แก้</b> ถ้ามีกล่องเหลือง <b>ตรวจพบ … จุด</b> กด <b>ให้ AI แก้</b>" },
+  { t: "สร้างเรื่อง & ใส่นิยาย", d: "กด <b>+ สร้างโปรเจกต์ใหม่</b> แล้วลากไฟล์ .txt .docx .epub มาวาง (กี่ร้อยกี่พันตอนก็ได้) แอปแยกตอนให้เอง" },
+  { t: "กดแปล", d: "แท็บ <b>ตอน</b> กด <b>แปลที่ยังไม่แปล</b> เพื่อแปลทุกตอน หรือกด <b>แปล</b> ท้ายแถวเพื่อแปลตอนเดียว ชื่อตัวละครระบบจำให้เอง" },
+  { t: "อ่าน", d: "ตอนไหนเสร็จแล้วกด <b>อ่าน</b> ได้เลย ไม่ต้องรอตอนอื่น" },
   { t: "ส่งออกไฟล์", d: "แท็บ <b>ส่งออก</b> กด <b>Word .docx</b> หรือ <b>E-book .epub</b> และดาวน์โหลดไฟล์สำรองเก็บไว้" },
 ];
 
@@ -168,15 +168,15 @@ function viewHome() {
     <div>
       <p class="eyebrow">NOVEL LOCK</p>
       <h1>แปลนิยาย <em>ชื่อไม่เพี้ยน</em></h1>
-      <p class="lede">แปลนิยายต่างประเทศเป็นภาษาไทย ทำตามคู่มือด้านล่าง 6 ขั้นจบ</p>
+      <p class="lede">แปลนิยายต่างประเทศเป็นภาษาไทย ทำตามคู่มือด้านล่าง ${GUIDE.length} ขั้นจบ</p>
       <div class="row"><button class="btn primary" data-action="new-project">+ สร้างโปรเจกต์ใหม่</button><button class="btn" data-action="view" data-view="ai">ตั้งค่า AI</button></div>
     </div>
     <img class="hero-logo" src="/favicon.svg" alt="" width="200" height="200">
   </section>
   <div class="card"><h2>เรื่องของคุณ</h2>${list}</div>
   <div class="card">
-    <h2>คู่มือ 6 ขั้น</h2>
-    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${done[i] ? "✓" : i + 1}</span><div><small class="step-of">ขั้นที่ ${i + 1} จาก 6</small><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
+    <h2>คู่มือ ${GUIDE.length} ขั้น</h2>
+    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${done[i] ? "✓" : i + 1}</span><div><small class="step-of">ขั้นที่ ${i + 1} จาก ${GUIDE.length}</small><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
   </div>
   <div class="card small muted">
     <h3>เก็บข้อมูลยังไง</h3>
@@ -224,7 +224,7 @@ function viewChapters() {
       (c, i) => `<tr>
       <td><input type="checkbox" data-action="select" data-id="${c.id}" ${state.selected.has(c.id) ? "checked" : ""} aria-label="เลือก ${esc(c.title)}"></td>
       <td class="muted hide-sm">${i + 1}</td>
-      <td class="ch-title"><a href="#" data-action="${c.translation ? "read-book" : "read"}" data-id="${c.id}">${esc(c.titleT || c.title)}</a>${c.titleT && c.titleT !== c.title ? `<small>${esc(c.title)}</small>` : ""}</td>
+      <td class="ch-title"><a href="#" data-action="read-book" data-id="${c.id}">${esc(c.titleT || c.title)}</a>${c.titleT && c.titleT !== c.title ? `<small>${esc(c.title)}</small>` : ""}</td>
       <td class="muted small hide-sm">${fmt(c.text.length)} ตัวอักษร</td>
       <td>${chapterBadge(c)}${c.error ? `<div class="small" style="color:var(--accent)">${esc(c.error.slice(0, 120))}</div>` : ""}</td>
       <td class="row end" style="flex-wrap:nowrap">${c.translation ? `<button class="btn sm primary" data-action="read-book" data-id="${c.id}">อ่าน</button>` : ""}<button class="btn sm" data-action="translate-one" data-id="${c.id}">${c.translation ? "แปลใหม่" : "แปล"}</button><button class="btn sm ghost danger" data-action="delete-chapter" data-id="${c.id}" aria-label="ลบตอน">ลบ</button></td>
@@ -347,45 +347,67 @@ async function runQueue(ids) {
     },
   });
   render();
-  for (const ch of queue) {
-    run.current = ch.titleT || ch.title;
-    run.step = "";
-    renderRunner();
-    try {
-      await translateChapter(p, ch, {
-        call,
-        signal: abort.signal,
-        onProgress: (e) => {
-          if (e.step === "terms") {
-            run.added += e.added.length;
-            if (e.added.length) log(`${ch.title}: พบคำใหม่ ${e.added.length} คำ (${e.added.slice(0, 5).map((t) => `${t.source}=${t.target}`).join(", ")}${e.added.length > 5 ? " …" : ""})`);
-          } else if (e.step === "warn") log(e.message);
-          else run.step = stepText(e);
-          renderRunner();
-        },
-      });
-      run.done++;
-      run.firstId ??= ch.id;
-      log(`✓ ${ch.titleT || ch.title}${ch.issues?.ok === false ? ` (มีจุดต้องเช็ก ${ch.issues.missing.length + ch.issues.leftovers.length})` : ""}`);
-    } catch (e) {
-      if (e.name === "AbortError") {
-        log("หยุดแล้ว");
-        break;
+  // Workers take chapters in order, so finished chapters appear one after another and can be read
+  // while the rest translate. The glossary is shared: terms found in one chapter apply to the next.
+  const working = new Map();
+  const showCurrent = () => (run.current = [...working.values()].join(" · "));
+  let next = 0;
+  let stopped = false;
+  async function worker() {
+    while (!stopped && next < queue.length) {
+      const ch = queue[next++];
+      working.set(ch.id, ch.titleT || ch.title);
+      showCurrent();
+      renderRunner();
+      try {
+        await translateChapter(p, ch, {
+          call,
+          signal: abort.signal,
+          onProgress: (e) => {
+            if (e.step === "terms") {
+              run.added += e.added.length;
+              if (e.added.length) log(`${ch.title}: พบคำใหม่ ${e.added.length} คำ (${e.added.slice(0, 5).map((t) => `${t.source}=${t.target}`).join(", ")}${e.added.length > 5 ? " …" : ""})`);
+            } else if (e.step === "warn") log(e.message);
+            else run.step = stepText(e);
+            renderRunner();
+          },
+        });
+        run.done++;
+        run.firstId ??= ch.id;
+        log(`✓ ${ch.titleT || ch.title}${ch.issues?.ok === false ? ` (มีจุดต้องเช็ก ${ch.issues.missing.length + ch.issues.leftovers.length})` : ""}`);
+      } catch (e) {
+        if (e.name === "AbortError") {
+          if (!stopped) log("หยุดแล้ว");
+          stopped = true;
+        } else {
+          log(`✗ ${ch.title}: ${e.message}`);
+          if (e.kind === "auth" || e.kind === "quota") stopped = true;
+        }
+      } finally {
+        working.delete(ch.id);
+        showCurrent();
+        save(true);
+        if (state.view !== "read" && state.view !== "book") render();
       }
-      log(`✗ ${ch.title}: ${e.message}`);
-      if (e.kind === "auth" || e.kind === "quota") break;
-    } finally {
-      save(true);
-      if (state.view !== "read" && state.view !== "book") render();
     }
   }
+  const lanes = Math.max(1, Math.min(Number(ai().parallel) || 1, queue.length));
+  await Promise.all(Array.from({ length: lanes }, worker));
   run.finished = true;
   run.step = "";
-  // New terms found now may also occur in chapters translated earlier: check those again.
-  const stale = p.chapters.filter((c) => c.translation && !queue.includes(c) && recheckChapter(p, c)?.ok === false);
-  if (stale.length) log(`ตอนที่แปลก่อนหน้า ${stale.length} ตอนมีคำใหม่ที่ยังไม่ตรงอภิธานศัพท์ · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
+  // Terms found later in the run may occur in chapters translated earlier: check every chapter again.
+  const flagged = p.chapters.filter((c) => c.translation && recheckChapter(p, c)?.ok === false);
   save(true);
   render();
+  if (flagged.length && !stopped && ai().paid) {
+    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน · กำลังแก้ ${flagged.length} ตอนที่มีคำไม่ตรงอภิธานศัพท์`);
+    const firstId = run.firstId;
+    await fixQueue(flagged);
+    if (state.run) state.run.firstId = firstId;
+    renderRunner();
+    return;
+  }
+  if (flagged.length) log(`มี ${flagged.length} ตอนที่มีคำไม่ตรงอภิธานศัพท์ · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
   toast(`แปลเสร็จ ${run.done}/${run.total} ตอน${run.added ? ` · คำใหม่ ${run.added} คำ` : ""}`);
 }
 
@@ -431,8 +453,9 @@ function renderRunner() {
   }
   box.hidden = false;
   const pct = Math.round((run.done / run.total) * 100);
-  box.innerHTML = `<div class="row"><b class="grow">${run.finished ? `แปลเสร็จ ${run.done}/${run.total} ตอน` : `กำลังแปล ${run.done + 1}/${run.total}: ${esc(run.current)}`}</b>
-    ${run.finished ? `${run.firstId ? `<button class="btn sm primary" data-action="read-book" data-id="${run.firstId}">อ่านเลย</button>` : ""}<button class="btn sm" data-action="close-runner">ปิด</button>` : `<button class="btn sm" data-action="stop">หยุด</button>`}</div>
+  const readBtn = run.firstId && state.view !== "book" ? `<button class="btn sm primary" data-action="read-book" data-id="${run.firstId}">${run.finished ? "อ่านเลย" : "อ่านตอนที่เสร็จแล้ว"}</button>` : "";
+  box.innerHTML = `<div class="row"><b class="grow">${run.finished ? `แปลเสร็จ ${run.done}/${run.total} ตอน` : `เสร็จ ${run.done}/${run.total} ตอน · กำลังแปล: ${esc(run.current)}`}</b>
+    ${readBtn}${run.finished ? `<button class="btn sm" data-action="close-runner">ปิด</button>` : `<button class="btn sm" data-action="stop">หยุด</button>`}</div>
     <div class="bar"><i style="width:${pct}%"></i></div>
     <div class="small">${esc(run.step)}</div>
     <div class="log">${run.log.slice(-6).map(esc).join("\n")}</div>`;
@@ -709,7 +732,6 @@ function viewSettings() {
     <div class="grid2" style="margin-top:10px">
       <label class="field"><span>คำใหม่ที่ AI หาเจอ</span><select name="autoTerms">
         <option value="auto" ${p.autoTerms === "auto" ? "selected" : ""}>ล็อกให้เลย (แก้ทีหลังได้)</option>
-        <option value="pending" ${p.autoTerms === "pending" ? "selected" : ""}>ใช้ไปก่อน แต่รอฉันยืนยัน</option>
         <option value="off" ${p.autoTerms === "off" ? "selected" : ""}>ไม่ต้องหา (ประหยัดโควตา)</option></select></label>
       <label class="field"><span>ขนาดท่อนต่อการเรียก AI 1 ครั้ง (ตัวอักษรต้นฉบับ)</span><input type="number" name="chunkSize" min="500" max="20000" step="100" value="${size}"></label>
     </div>
@@ -766,6 +788,14 @@ function viewAI() {
     </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aiFallback" ${a.fallback ? "checked" : ""}><span>สลับไปโมเดลอื่นอัตโนมัติเมื่อโควตาฟรีของโมเดลนี้หมด <span class="small muted">(${esc((aiConfig().fallbackModels || []).join(" → ") || "-")})</span></span></label>
     <div class="row" style="margin-top:12px"><button class="btn primary" data-action="test-ai">ทดสอบการเชื่อมต่อ</button><span id="aiTest" class="small"></span></div>
+  </div>
+  <div class="card">
+    <h2>ความเร็ว</h2>
+    <div class="grid2">
+      <label class="field"><span>แปลพร้อมกันกี่ตอน</span><select id="aiParallel">${[1, 2, 3, 5, 8].map((n) => `<option value="${n}" ${n === Number(a.parallel) ? "selected" : ""}>${n} ตอน${n === 1 ? " (ทีละตอน)" : ""}</option>`).join("")}</select></label>
+    </div>
+    <label class="check" style="margin-top:10px"><input type="checkbox" id="aiPaid" ${a.paid ? "checked" : ""}><span>key นี้เป็นแบบเสียเงิน ไม่ต้องเว้นระยะรอโควตาฟรี</span></label>
+    <p class="small muted" style="margin:8px 0 0">key ฟรี (Gemini ฟรี, Groq, Pollinations) ใช้ 1 ตอน · key เสียเงิน (OpenAI, Claude, Gemini แบบผูกบัตร) ติ๊กช่องนี้แล้วตั้ง 3–5 ตอน จะเร็วขึ้นหลายเท่า · คำในอภิธานศัพท์ใช้ร่วมกันทุกตอน คำใหม่ที่เจอจะถูกล็อกและใช้กับตอนถัดไปทันที</p>
     ${exhaustedSet().size ? `<p class="small muted" style="margin:10px 0 0">โควตาฟรีวันนี้หมดแล้ว: ${esc([...exhaustedSet()].map((k) => k.split("/").slice(1).join("/")).join(", "))} · <a href="#" data-action="reset-quota">ล้าง (ถ้าโควตารีเซ็ตแล้ว)</a></p>` : ""}
   </div>
   <div class="card small muted">key เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น และส่งตรงไปที่ ${esc(p.name)} · ถ้าใช้เครื่องคนอื่น กดล้าง key ก่อนออก <button class="btn sm" data-action="clear-key">ล้าง key</button></div>
@@ -795,6 +825,8 @@ afterRender.ai = () => {
     saveAI({ fallback: e.target.checked });
     render();
   });
+  $("#aiParallel").addEventListener("change", (e) => saveAI({ parallel: Number(e.target.value) }));
+  $("#aiPaid").addEventListener("change", (e) => saveAI({ paid: e.target.checked }));
 };
 
 async function testAI() {
