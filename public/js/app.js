@@ -468,6 +468,7 @@ function viewRead() {
     <span class="grow"></span>
     <button class="btn" data-action="translate-one" data-id="${c.id}" ${busy() ? "disabled" : ""}>${c.translation ? "แปลตอนนี้ใหม่" : "แปลตอนนี้"}</button>
   </div>
+  ${p.credit ? `<p class="small muted">ต้นฉบับ: ${esc(p.credit)}</p>` : ""}
   ${issueBox}
   ${c.summary ? `<p class="summary"><b>เรื่องย่อตอนนี้</b> (AI ใช้เป็นบริบทของตอนถัดไป): ${esc(c.summary)}</p>` : ""}
   <div class="reader">

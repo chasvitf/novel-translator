@@ -179,5 +179,6 @@ mark.miss { background: var(--accent-soft); outline: 1px solid var(--accent); }
   .ai-pill { max-width: 42vw; }
   .tabs { top: 55px; }
   .hide-sm { display: none; }
+  #chapterSel { min-width: 0; flex: 1 1 140px; }
   th, td { padding: 6px 4px; }
 }
