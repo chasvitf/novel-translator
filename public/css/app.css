@@ -74,6 +74,7 @@ p { margin: 0 0 .8em; }
 
 .tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--card); overflow-x: auto; scrollbar-width: none; position: sticky; top: 57px; z-index: 19; }
 .tabs button { border: 0; background: none; padding: 10px 14px; cursor: pointer; color: var(--ink-2); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs button:disabled { opacity: .4; cursor: not-allowed; }
 .tabs button[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 
 main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 20px 16px 120px; outline: none; }
