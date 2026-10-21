@@ -47,6 +47,9 @@ def cut(s, n):
 out = {
     "zh-xiyouji-01.txt": wiki("zh-xiyouji-001.wiki"),
     "zh-xiyouji-02.txt": wiki("zh-xiyouji-002.wiki"),
+    "zh-xiyouji-03.txt": wiki("zh-xiyouji-003.wiki"),
+    "zh-xiyouji-04.txt": wiki("zh-xiyouji-004.wiki"),
+    "zh-xiyouji-05.txt": wiki("zh-xiyouji-005.wiki"),
     "zh-shuihu-02.txt": cut(wiki("zh-shuihu-002.wiki"), 5000),
     "ja-rashomon.txt": aozora("ja-rashomon.html"),
     "ja-neko-01.txt": cut(aozora("ja-neko.html"), 3500),

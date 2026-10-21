@@ -141,7 +141,7 @@ function toast(msg) {
 // ---------------- home ----------------
 
 const SAMPLES = [
-  { id: "xiyouji", file: "xiyouji.json", title: "西遊記 ไซอิ๋ว", lang: "จีน", note: "2 ตอน · ชื่อเยอะ วิชาเยอะ" },
+  { id: "xiyouji", file: "xiyouji.json", title: "西遊記 ไซอิ๋ว", lang: "จีน", note: "5 ตอน · อภิธานศัพท์ 163 คำ" },
   { id: "rashomon", file: "rashomon.json", title: "羅生門 ราโชมอน", lang: "ญี่ปุ่น", note: "อาคุตางาวะ · สำนวนเก่า" },
   { id: "unsu", file: "unsu.json", title: "운수 좋은 날 วันโชคดี", lang: "เกาหลี", note: "ฮยอน จิน-กอน · ภาษาพูด" },
   { id: "holmes", file: "holmes.json", title: "A Scandal in Bohemia", lang: "อังกฤษ", note: "เชอร์ล็อก โฮมส์ · บทพูดเยอะ" },
@@ -248,6 +248,7 @@ function viewChapters() {
     .join("");
   const todo = p.chapters.filter((c) => !c.translation);
   const sel = p.chapters.filter((c) => state.selected.has(c.id));
+  const flagged = p.chapters.filter((c) => c.translation && c.issues && !c.issues.ok);
   const pending = state.pendingImport;
   return `
   <div class="card">
@@ -275,6 +276,7 @@ function viewChapters() {
       <h2 class="grow" style="margin:0">ตอนทั้งหมด (${p.chapters.length})</h2>
       ${sel.length ? `<button class="btn" data-action="clear-select">ยกเลิกเลือก</button><button class="btn primary" data-action="translate-selected" ${busy() ? "disabled" : ""}>แปลที่เลือก ${sel.length} ตอน</button>` : ""}
       ${todo.length ? `<button class="btn ${sel.length ? "" : "primary"}" data-action="translate-todo" ${busy() ? "disabled" : ""}>แปลที่ยังไม่แปล (${todo.length})</button>` : ""}
+      ${flagged.length ? `<button class="btn" data-action="fix-all" ${busy() ? "disabled" : ""}>แก้ทุกตอนที่มีจุดต้องเช็ก (${flagged.length})</button>` : ""}
     </div>
     ${todo.length || sel.length ? `<p class="small muted">ประมาณ ${fmt(estimateCalls(p, sel.length ? sel : todo))} ครั้งที่เรียก AI${ai().provider === "gemini" ? " · Gemini ฟรีได้ราว 20 ครั้ง/วัน/โมเดล ระบบสลับโมเดลให้เองเมื่อโควตาหมด" : ""}</p>` : ""}
     ${!aiReady() ? `<div class="issues">ยังไม่ได้ตั้งค่า AI · <a href="#" data-action="view" data-view="ai">ตั้งค่าตอนนี้</a> (Gemini ฟรี ใช้เวลา 1 นาที)</div>` : ""}
@@ -393,8 +395,40 @@ async function runQueue(ids) {
   }
   run.finished = true;
   run.step = "";
+  // New terms found now may also occur in chapters translated earlier: check those again.
+  const stale = p.chapters.filter((c) => c.translation && !queue.includes(c) && recheckChapter(p, c)?.ok === false);
+  if (stale.length) log(`ตอนที่แปลก่อนหน้า ${stale.length} ตอนมีคำใหม่ที่ยังไม่ตรงอภิธานศัพท์ · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
+  save(true);
   render();
   toast(`แปลเสร็จ ${run.done}/${run.total} ตอน${run.added ? ` · คำใหม่ ${run.added} คำ` : ""}`);
+}
+
+// Fix every translated chapter whose check found problems (same as "ให้ AI แก้" on each).
+async function fixQueue(chapters) {
+  if (busy() || !aiReady()) return aiReady() ? toast("กำลังทำงานอยู่") : go("ai");
+  const p = state.project;
+  const exhausted = exhaustedSet();
+  const run = (state.run = { abort: new AbortController(), total: chapters.length, done: 0, current: "", step: "แก้คำที่เพี้ยน", log: [] });
+  const call = createCaller(aiConfig(), {
+    exhausted,
+    onWait: (ms, why) => (run.log.push(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`), renderRunner()),
+    onSwitch: (from, to) => (store.prefs.set(`exhausted:${today()}`, [...exhausted]), run.log.push(`สลับ ${from} → ${to}`)),
+  });
+  for (const c of chapters) {
+    run.current = c.titleT || c.title;
+    renderRunner();
+    try {
+      const r = await fixChapter(p, c, { call, signal: run.abort.signal, onProgress: (e) => ((run.step = stepText(e)), renderRunner()) });
+      run.done++;
+      run.log.push(`${r.ok ? "✓" : "เหลือ " + (r.missing.length + r.leftovers.length) + " จุด"} ${c.titleT || c.title}`);
+    } catch (e) {
+      run.log.push(`✗ ${c.title}: ${e.message}`);
+      if (e.name === "AbortError" || e.kind === "auth" || e.kind === "quota") break;
+    }
+    save(true);
+  }
+  run.finished = true;
+  render();
 }
 
 function stepText(e) {
@@ -567,6 +601,7 @@ afterRender.glossary = () => {
     const d = Object.fromEntries(new FormData(e.target));
     if (p.glossary.some((x) => x.source === d.source.trim())) return toast("มีคำนี้แล้ว");
     p.glossary.unshift(makeEntry(d));
+    p.chapters.forEach((c) => recheckChapter(p, c));
     save();
     render();
     toast("เพิ่มคำแล้ว");
@@ -610,6 +645,7 @@ afterRender.glossary = () => {
         added++;
       }
     }
+    p.chapters.forEach((c) => recheckChapter(p, c));
     save();
     render();
     toast(`นำเข้าแล้ว: ใหม่ ${added} · อัปเดต ${updated}`);
@@ -876,6 +912,7 @@ const actions = {
     render();
   },
   "translate-selected": () => runQueue(state.project.chapters.filter((c) => state.selected.has(c.id)).map((c) => c.id)),
+  "fix-all": () => fixQueue(state.project.chapters.filter((c) => c.translation && c.issues && !c.issues.ok)),
   "translate-todo": () => runQueue(state.project.chapters.filter((c) => !c.translation).map((c) => c.id)),
   "translate-one": (el) => {
     const c = state.project.chapters.find((x) => x.id === el.dataset.id);

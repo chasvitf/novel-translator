@@ -73,24 +73,23 @@ export function relevantEntries(entries, text) {
   return entries.filter((e) => counts.has(e.id)).sort((a, b) => b.source.length - a.source.length);
 }
 
-// Scripts that should not appear in a translation into a given language. Models occasionally leak
-// a character from an unrelated script too (a Hangul syllable inside a Japanese→Thai name), so all are checked.
-const SCRIPTS = {
-  han: /[\u4e00-\u9fff\u3400-\u4dbf]+/g,
-  kana: /[\u3040-\u30ff]+/g,
-  hangul: /[\uac00-\ud7af\u1100-\u11ff]+/g,
-  cyrillic: /[\u0400-\u04ff]{3,}/g,
+// Letters allowed in a translation into each language (anything else is a leak: "โมมิเอ보ชิ",
+// "กรมอัศతรสวรรค์" with a Telugu letter, kanji left in Thai). Latin is allowed everywhere;
+// stray Latin words are checked separately.
+const SCRIPT_OF = {
+  th: ["Thai"],
+  zh: ["Han"],
+  ja: ["Han", "Hiragana", "Katakana"],
+  ko: ["Hangul", "Han"],
+  ru: ["Cyrillic"],
 };
-const ALLOWED = { zh: ["han"], ja: ["han", "kana"], ko: ["hangul", "han"], ru: ["cyrillic"] };
+const letterRe = (lang) => {
+  const ok = ["Latin", ...(SCRIPT_OF[lang] || [])].map((sc) => `\\p{Script=${sc}}`).join("");
+  return new RegExp(`(?:(?![${ok}])\\p{L})+`, "gu");
+};
 
 function foreignRuns(text, tgtLang) {
-  const allowed = ALLOWED[tgtLang] || [];
-  const out = new Set();
-  for (const [name, re] of Object.entries(SCRIPTS)) {
-    if (allowed.includes(name)) continue;
-    for (const m of text.match(re) || []) out.add(m);
-  }
-  return [...out];
+  return [...new Set(text.match(letterRe(tgtLang)) || [])];
 }
 
 // Latin words in a Thai (or other non-Latin) translation that the source does not contain either:
@@ -120,18 +119,14 @@ export function checkTranslation(source, translated, entries, srcLang, tgtLang) 
   return { missing, leftovers, ok: missing.length === 0 && leftovers.length === 0 };
 }
 
-const FOREIGN = { ko: /[\uac00-\ud7af\u1100-\u11ff]/, ja: /[\u3040-\u30ff]/, zh: /[\u4e00-\u9fff]/ };
-
 // Clean up a translation proposed by the AI: keep the first of "A / B" alternatives, and reject
-// renderings that still carry source script (e.g. "ประตูทง소문"), which would be locked in for good.
+// renderings with letters from another script (e.g. "ประตูทง소문"), which would be locked in for good.
 export function cleanProposedTarget(target, tgtLang) {
   let t = String(target ?? "").trim();
-  t = t.split(/\s*[\/／|]\s*|\s+(?:or|หรือ)\s+/)[0].replace(/^["“'‘(（]+|["”'’)）]+$/g, "").trim();
-  for (const [lang, re] of Object.entries(FOREIGN)) {
-    if (lang === tgtLang || (lang === "zh" && tgtLang === "ja")) continue;
-    if (re.test(t)) return "";
-  }
-  return t;
+  t = t.split(/\s*[\/／|]\s*|\s+(?:or|หรือ)\s+/)[0];
+  t = t.replace(/\s*[(（[].*$/, ""); // "ท้าวตั๋วหลัวหลี่ (ท้าวเวสสุวรรณ)" → keep the name, drop the aside
+  t = t.replace(/^["“'‘]+|["”'’]+$/g, "").trim();
+  return foreignRuns(t, tgtLang).length ? "" : t;
 }
 
 // Add proposed terms whose source is not in the glossary yet. Returns the entries added.
@@ -141,6 +136,7 @@ export function mergeTerms(glossary, proposed, status, tgtLang = "th") {
   for (const p of proposed || []) {
     const e = makeEntry({ ...p, target: cleanProposedTarget(p?.target, tgtLang), status });
     if (!e.source || !e.target || known.has(e.source)) continue;
+    if (/[、,，;；]/.test(e.source)) continue; // several names in one entry ("龐、劉、苟…") can never be checked
     if (e.source.length > 40 || e.target.length > 60) continue;
     known.add(e.source);
     glossary.push(e);
