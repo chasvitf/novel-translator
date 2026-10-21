@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Novel Lock · แปลนิยายด้วย AI แบบชื่อไม่เพี้ยน</title>
+  <meta name="description" content="แปลนิยายจีน ญี่ปุ่น เกาหลี อังกฤษ เวียดนาม เป็นไทยทีละหลายตอน ด้วย AI ฟรี ล็อกชื่อตัวละคร สถานที่ วิชา ไม่ให้เพี้ยน ขัดเกลาสำนวน และส่งออก .docx / .epub">
+  <meta property="og:title" content="Novel Lock · แปลนิยายด้วย AI แบบชื่อไม่เพี้ยน">
+  <meta property="og:description" content="ล็อกชื่อตัวละคร สถานที่ วิชา ด้วยอภิธานศัพท์ แปลทีละหลายตอน ใช้ Gemini ฟรีได้">
+  <meta property="og:image" content="/og.png">
+  <meta name="theme-color" content="#b42318">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Noto+Serif+Thai:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#" data-action="home" aria-label="หน้าแรก">
+      <span class="seal" aria-hidden="true">鎖</span>
+      <span><b>Novel Lock</b><small>แปลนิยาย ชื่อไม่เพี้ยน</small></span>
+    </a>
+    <div class="top-project" id="topProject"></div>
+    <button class="ai-pill" id="aiPill" data-action="view" data-view="ai" type="button"></button>
+  </header>
+  <nav class="tabs" id="tabs" hidden>
+    <button data-action="view" data-view="chapters" type="button">ตอน</button>
+    <button data-action="view" data-view="read" type="button">อ่าน & แก้</button>
+    <button data-action="view" data-view="glossary" type="button">อภิธานศัพท์</button>
+    <button data-action="view" data-view="settings" type="button">ตั้งค่าเรื่อง</button>
+    <button data-action="view" data-view="export" type="button">ส่งออก</button>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+  <div class="runner" id="runner" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <footer class="foot">
+    ทุกอย่างเก็บในเครื่องคุณเท่านั้น · key ส่งตรงไปที่ผู้ให้บริการ AI · <a href="https://github.com/chasvitf/novel-translator" target="_blank" rel="noopener">โค้ด</a>
+  </footer>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

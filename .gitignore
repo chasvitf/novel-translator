@@ -1,0 +1,7 @@
+.env
+node_modules/
+corpus/raw/
+corpus/out/
+corpus/vi-*
+.vercel
+.DS_Store
