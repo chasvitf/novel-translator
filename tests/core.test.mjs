@@ -158,3 +158,24 @@ test("leftover check catches stray characters from any foreign script", () => {
   assert.ok(checkTranslation("x", "ข้อความ “ไทย” ล้วน", [], "en", "th").ok);
   assert.ok(checkTranslation("林動", "林動は", [], "zh", "ja").ok, "kanji and kana are fine in Japanese");
 });
+
+test("caller tries the next model when one refuses a passage, and keeps the first model preferred", async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => (globalThis.fetch = realFetch));
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    const m = String(url).match(/models\/([^:]+)/)[1];
+    asked.push(m);
+    if (m === "a" && asked.length === 1) return new Response(JSON.stringify({ promptFeedback: { blockReason: "PROHIBITED_CONTENT" } }), { status: 200 });
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: `ok-${m}` }] }, finishReason: "STOP" }] }), { status: 200 });
+  };
+  const call = createCaller({ provider: "gemini", key: "k", model: "a", fallbackModels: ["a", "b"], minIntervalMs: 0 });
+  assert.equal((await call({ system: "s", user: "u" })).text, "ok-b");
+  assert.equal((await call({ system: "s", user: "u" })).text, "ok-a");
+});
+
+test("stray English words in a Thai translation are flagged unless the source has them", () => {
+  assert.deepEqual(checkTranslation("見当がつかぬ", "เกิดที่ไหนก็ Coontail ไม่ได้", [], "ja", "th").leftovers, ["Coontail"]);
+  assert.ok(checkTranslation("He said OK to Holmes", "เขาบอก OK กับ Holmes", [], "en", "th").ok);
+  assert.ok(checkTranslation("x", "Watson", [makeEntry({ source: "华生", target: "Watson" })], "zh", "th").ok);
+});

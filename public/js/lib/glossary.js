@@ -93,6 +93,17 @@ function foreignRuns(text, tgtLang) {
   return [...out];
 }
 
+// Latin words in a Thai (or other non-Latin) translation that the source does not contain either:
+// models sometimes drop an English gloss into the text ("Coontail").
+const NON_LATIN_TARGETS = new Set(["th", "zh", "ja", "ko", "ru"]);
+function strayLatin(source, translated, entries, tgtLang) {
+  if (!NON_LATIN_TARGETS.has(tgtLang)) return [];
+  const src = source.toLowerCase();
+  const allowed = entries.map((e) => `${e.target} ${e.source}`.toLowerCase()).join(" ");
+  const words = (translated.match(/[A-Za-z][A-Za-z'’-]{2,}/g) || []).map((w) => w.replace(/['’-]+$/, "")).filter((w) => w.length >= 3);
+  return [...new Set(words.filter((w) => !src.includes(w.toLowerCase()) && !allowed.includes(w.toLowerCase()) && !/^(?:OK|AI|CEO|ID|DNA|GPS|TV|VIP)$/i.test(w)))];
+}
+
 // Compare a translation with its source: locked terms that did not come through,
 // and runs of foreign script left in the text.
 export function checkTranslation(source, translated, entries, srcLang, tgtLang) {
@@ -105,7 +116,7 @@ export function checkTranslation(source, translated, entries, srcLang, tgtLang) 
     const found = isLatin(e.target) ? occurrences(translated, e.target).length : lower.split(e.target.toLowerCase()).length - 1;
     if (found === 0) missing.push({ entry: e, expected: srcCounts.get(e.id) || 1 });
   }
-  const leftovers = srcLang === tgtLang ? [] : foreignRuns(translated, tgtLang);
+  const leftovers = srcLang === tgtLang ? [] : [...foreignRuns(translated, tgtLang), ...strayLatin(source, translated, entries, tgtLang)];
   return { missing, leftovers, ok: missing.length === 0 && leftovers.length === 0 };
 }
 

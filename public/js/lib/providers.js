@@ -281,20 +281,21 @@ export function listModels(cfg) {
   return compatModels(cfg);
 }
 
-// Spaces calls out per provider, retries rate limits and network errors, and moves on to the
-// next model in `cfg.fallbackModels` when a model's daily free quota runs out (each model has its own).
-// `exhausted` is a Set of "provider/model" keys the app can persist for the day.
+// Spaces calls out per provider and retries rate limits and network errors. Moves on to the next
+// model in `cfg.fallbackModels` when a model's daily free quota runs out (each model has its own),
+// when it keeps answering "overloaded", or when it refuses a passage (often a false positive of one
+// model). `exhausted` is a Set of "provider/model" keys the app can persist for the day.
+const ALL_GONE = "โควตาฟรีของวันนี้หมดทุกโมเดลแล้ว ลองใหม่พรุ่งนี้ หรือเปลี่ยนผู้ให้บริการ/ใส่ key อื่น";
+
 export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), maxAttempts = 6 } = {}) {
   const minGap = cfg.minIntervalMs ?? PROVIDERS[cfg.provider]?.minIntervalMs ?? 0;
   const chain = [cfg.model, ...(cfg.fallbackModels || [])].filter((m, i, a) => m && a.indexOf(m) === i);
   const keyOf = (m) => `${cfg.provider}/${m}`;
   let last = 0;
-  const call = async function (req) {
-    const models = chain.filter((m) => !exhausted.has(keyOf(m)));
-    if (!models.length) throw new AIError("quota", "โควตาฟรีของวันนี้หมดทุกโมเดลแล้ว ลองใหม่พรุ่งนี้ หรือเปลี่ยนผู้ให้บริการ/ใส่ key อื่น");
-    const model = models[0];
+
+  async function attempt(model, req) {
     let overloaded = 0;
-    for (let attempt = 1; ; attempt++) {
+    for (let n = 1; ; n++) {
       const gap = last + minGap - Date.now();
       if (gap > 0) {
         if (gap > 3000) onWait?.(gap, "เว้นระยะตามโควตาฟรี");
@@ -302,27 +303,38 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
       }
       last = Date.now();
       try {
-        const r = await complete({ ...cfg, model }, req);
-        return { ...r, model };
+        return await complete({ ...cfg, model }, req);
       } catch (e) {
         if (!(e instanceof AIError)) throw e;
-        if (e.kind === "network" && /\(503\)/.test(e.message)) overloaded++;
-        // Daily quota gone, or the model keeps answering "overloaded": continue on the next model.
-        if (e.kind === "quota" || (overloaded >= 3 && models.length > 1)) {
-          if (e.kind === "quota") exhausted.add(keyOf(model));
-          else chain.push(chain.splice(chain.indexOf(model), 1)[0]); // try it again later
-          const next = chain.find((m) => !exhausted.has(keyOf(m)) && m !== model);
-          if (!next) throw e.kind === "quota" ? new AIError("quota", "โควตาฟรีของวันนี้หมดทุกโมเดลแล้ว ลองใหม่พรุ่งนี้ หรือเปลี่ยนผู้ให้บริการ/ใส่ key อื่น") : e;
-          onSwitch?.(model, next, e.message);
-          return call(req);
+        if (e.kind === "network" && /\(503\)/.test(e.message) && ++overloaded >= 3 && chain.length > 1) {
+          e.kind = "overloaded";
+          throw e;
         }
-        const retryable = e.kind === "rate" || e.kind === "network";
-        if (!retryable || attempt >= maxAttempts) throw e;
-        const wait = Math.max(e.retryAfterMs, 2000 * 2 ** (attempt - 1));
+        if (!(e.kind === "rate" || e.kind === "network") || n >= maxAttempts) throw e;
+        const wait = Math.max(e.retryAfterMs, 2000 * 2 ** (n - 1));
         onWait?.(wait, e.message);
         await sleep(wait, req.signal);
       }
     }
+  }
+
+  return async function call(req) {
+    const skip = new Set();
+    let lastErr = null;
+    for (;;) {
+      const model = chain.find((m) => !exhausted.has(keyOf(m)) && !skip.has(m));
+      if (!model) throw lastErr && lastErr.kind !== "quota" ? lastErr : new AIError("quota", ALL_GONE);
+      try {
+        return { ...(await attempt(model, req)), model };
+      } catch (e) {
+        if (!(e instanceof AIError) || !["quota", "blocked", "overloaded"].includes(e.kind)) throw e;
+        if (e.kind === "quota") exhausted.add(keyOf(model));
+        if (e.kind === "overloaded") e.kind = "network";
+        skip.add(model);
+        lastErr = e;
+        const next = chain.find((m) => !exhausted.has(keyOf(m)) && !skip.has(m));
+        if (next) onSwitch?.(model, next, e.message);
+      }
+    }
   };
-  return call;
 }

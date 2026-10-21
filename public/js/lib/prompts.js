@@ -1,7 +1,7 @@
 // Prompt builders. Instructions are in English (models follow them most reliably);
 // the output language comes from the project settings.
 
-import { langByCode, genreById, NAME_STYLES } from "./langs.js";
+import { langByCode, genreById, NAME_STYLES, LANG_NOTES } from "./langs.js";
 import { typeName } from "./glossary.js";
 
 const L = (code) => langByCode(code).en;
@@ -38,6 +38,7 @@ export function translateSystem(s) {
     `5. ${quoteRule(s.tgtLang)}`,
     "6. Keep pronouns, forms of address and politeness levels consistent with the story context and the notes in the glossary.",
     "7. Output only the translated passage: no title, no notes, no explanations, no source text.",
+    LANG_NOTES[s.srcLang] ? `8. ${LANG_NOTES[s.srcLang]}` : "",
     s.custom ? `\nExtra instructions from the translator:\n${s.custom}` : "",
   ]
     .filter((x) => x !== "")
@@ -82,7 +83,7 @@ export function fixUser({ chunk, draft, entries, issues }) {
   for (const m of issues.missing) {
     lines.push(`- The source term "${m.entry.source}" must be translated as "${m.entry.target}" (it appears ${m.expected} time(s) in the source). Replace whatever the draft wrote for it.`);
   }
-  for (const t of issues.leftovers) lines.push(`- "${t}" was left untranslated. Translate it.`);
+  for (const t of issues.leftovers) lines.push(`- "${t}" is foreign text left in the translation. Replace it with the natural target-language word for what the source means there (translate by meaning; transliterate only names). If it is a stray fragment, remove it.`);
   return [
     "The draft below breaks these requirements. Correct only what is needed to meet them and keep the rest of the draft as it is:",
     lines.join("\n"),

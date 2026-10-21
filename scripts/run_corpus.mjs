@@ -48,7 +48,7 @@ for (const [name, book] of Object.entries(books)) {
   for (const ch of project.chapters) {
     const t0 = Date.now();
     console.log(`▶ ${ch.title} (${project.srcLang}, ${ch.text.length} chars)`);
-    await translateChapter(project, ch, { call, onProgress: (p) => p.step === "terms" ? console.log(`   + ${p.added.length} terms`) : p.step === "warn" ? console.log("   ! " + p.message) : p.step === "fix" ? console.log(`   fix chunk ${p.chunk + 1}`) : null });
+    await translateChapter(project, ch, { call, onProgress: (p) => p.step === "terms" ? console.log(`   + ${p.added.length} terms`) : p.step === "warn" ? console.log("   ! " + p.message) : p.step === "fix" ? console.log(`   fix chunk ${p.chunk + 1}: ${[...p.issues.missing.map((m) => m.entry.source + "→" + m.entry.target), ...p.issues.leftovers].join(", ")}`) : null });
     const final = checkTranslation(ch.text, ch.translation, project.glossary, project.srcLang, project.tgtLang);
     const row = { chapter: ch.title, lang: project.srcLang, chars: ch.text.length, chunks: ch.chunks.length, seconds: Math.round((Date.now() - t0) / 1000), glossary: project.glossary.length, missing: final.missing.map((m) => `${m.entry.source}→${m.entry.target}`), leftovers: final.leftovers, draftMisses: ch.chunks.reduce((n, c) => n + checkTranslation(c.src, c.draft, project.glossary, project.srcLang, "th").missing.length, 0) };
     report.push(row);
