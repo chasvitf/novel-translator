@@ -176,7 +176,7 @@ function viewHome() {
   <div class="card"><h2>เรื่องของคุณ</h2>${list}</div>
   <div class="card">
     <h2>คู่มือ ${GUIDE.length} ขั้น</h2>
-    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${done[i] ? "✓" : i + 1}</span><div><small class="step-of">ขั้นที่ ${i + 1} จาก ${GUIDE.length}</small><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
+    <ol class="guide">${GUIDE.map((s, i) => `<li${done[i] ? ` class="done"` : ""}><span class="num" aria-hidden="true">${i + 1}</span><div><small class="step-of">ขั้นที่ ${i + 1} จาก ${GUIDE.length}</small><b>${s.t}</b>${done[i] ? ` <span class="badge ok">เสร็จแล้ว</span>` : ""}<p>${s.d}</p></div></li>`).join("")}</ol>
   </div>
   <div class="card small muted">
     <h3>เก็บข้อมูลยังไง</h3>
