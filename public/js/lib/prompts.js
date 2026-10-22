@@ -119,6 +119,17 @@ export function analyzeUser({ title, text, known }) {
   return [k, `CHAPTER TITLE: ${title || "(none)"}`, `CHAPTER:\n<<<\n${text}\n>>>`].filter(Boolean).join("\n\n");
 }
 
+// A whole-chunk fix often copies a two-letter glitch (Armenian "ակ" inside a Thai word) straight
+// back, so stray script left after it is fixed on just the words around it.
+export function patchUser({ snippet, bad, tgtLang }) {
+  return [
+    `This short ${L(tgtLang)} snippet from a novel translation contains "${bad}", which is not ${L(tgtLang)} script (a glitch, often letters that look like ${L(tgtLang)} ones).`,
+    `Rewrite the snippet with "${bad}" replaced by the ${L(tgtLang)} letters or word that was meant, or removed if it is noise. Change nothing else.`,
+    `SNIPPET:\n<<<\n${snippet}\n>>>`,
+    "Output only the corrected snippet.",
+  ].join("\n\n");
+}
+
 // Pull the first JSON object out of a model reply (some wrap it in ``` fences or add a sentence).
 export function parseJSON(reply) {
   const s = String(reply);
