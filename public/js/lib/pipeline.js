@@ -86,6 +86,7 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
     out = fixed;
     issues = after;
   }
+  if (project.autoFix && issues.leftovers.length) ({ out, issues } = await patchLeftovers(project, src, out, entries, call, signal));
   return { src, draft, out, issues, model: first.model };
 }
 
@@ -99,6 +100,36 @@ export function acceptFix(before, after, issuesBefore, issuesAfter) {
   if (issuesAfter.leftovers.some((t) => !issuesBefore.leftovers.includes(t))) return false; // new garbage
   const ratio = after.length / Math.max(1, before.length);
   return ratio > 0.8 && ratio < 1.25;
+}
+
+// Fix stray foreign script that a whole-chunk fix left in place, using only the words around it.
+const PATCH_SPAN = 60;
+export async function patchLeftovers(project, src, out, entries, call, signal) {
+  let issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
+  for (const bad of issues.leftovers.slice(0, 5)) {
+    const at = out.indexOf(bad);
+    if (at < 0) continue;
+    // Widen to whole words: back and forward to the nearest whitespace past PATCH_SPAN characters.
+    let a = Math.max(0, at - PATCH_SPAN), b = Math.min(out.length, at + bad.length + PATCH_SPAN);
+    while (a > 0 && !/\s/.test(out[a - 1]) && at - a < PATCH_SPAN * 2) a--;
+    while (b < out.length && !/\s/.test(out[b]) && b - at < PATCH_SPAN * 3) b++;
+    const snippet = out.slice(a, b);
+    let fixed;
+    try {
+      fixed = P.cleanReply((await call({ system: P.polishSystem(project), user: P.patchUser({ snippet, bad, tgtLang: project.tgtLang }), signal })).text);
+    } catch (e) {
+      if (e.kind === "blocked" || e.kind === "bad" || e.kind === "length") continue;
+      throw e;
+    }
+    const next = out.slice(0, a) + fixed + out.slice(b);
+    const after = checkTranslation(src, next, entries, project.srcLang, project.tgtLang);
+    const ratio = fixed.length / Math.max(1, snippet.length);
+    if (!after.leftovers.includes(bad) && score(after) < score(issues) && !after.leftovers.some((t) => !issues.leftovers.includes(t)) && ratio > 0.7 && ratio < 1.4) {
+      out = next;
+      issues = after;
+    }
+  }
+  return { out, issues };
 }
 
 export async function translateChapter(project, chapter, { call, onProgress = () => {}, signal } = {}) {
@@ -186,6 +217,11 @@ export async function fixChapter(project, chapter, { call, signal, onProgress = 
         c.out = fixed;
         c.issues = after;
       }
+    }
+    const left = checkTranslation(c.src, c.out, entries, project.srcLang, project.tgtLang);
+    if (left.leftovers.length) {
+      onProgress({ step: "fix", chunk: i, total: pieces.length, issues: left });
+      ({ out: c.out, issues: c.issues } = await patchLeftovers(project, c.src, c.out, entries, call, signal));
     }
   }
   chapter.translation = pieces.map((c) => c.out).join("\n\n");

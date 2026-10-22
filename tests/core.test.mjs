@@ -219,3 +219,19 @@ test("an overloaded model is passed over on the next calls instead of being retr
   assert.equal((await call({ system: "s", user: "u" })).text, "ok-b");
   assert.deepEqual(asked.slice(before), ["b"], "second call goes straight to b");
 });
+
+test("patchLeftovers fixes stray script from the words around it only", async () => {
+  const { patchLeftovers } = await import("../public/js/lib/pipeline.js");
+  const project = { srcLang: "zh", tgtLang: "th", genre: "", nameStyle: "", custom: "", glossary: [] };
+  const pad = "ข้อความยาวมาก ".repeat(40);
+  const out = `${pad}หนึ่งรอบมหակัปป์ แบ่งออก ${pad}`;
+  const sent = [];
+  const call = async ({ user }) => { sent.push(user); const s = /<<<\n([\s\S]*)\n>>>/.exec(user)[1]; return { text: s.replace("ակ", "าก") }; };
+  const r = await patchLeftovers(project, "一元", out, [], call);
+  assert.ok(r.issues.ok);
+  assert.ok(r.out.includes("มหากัปป์") && r.out.length === out.length);
+  assert.ok(sent[0].length < 600, "only a snippet is sent");
+  // A reply that keeps the glitch is rejected.
+  const same = await patchLeftovers(project, "一元", out, [], async ({ user }) => ({ text: /<<<\n([\s\S]*)\n>>>/.exec(user)[1] }));
+  assert.equal(same.out, out);
+});

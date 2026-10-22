@@ -73,3 +73,8 @@
 - ทดสอบทั้งระบบด้วยเบราว์เซอร์อัตโนมัติ (agent-browser) กับ AI จำลองแบบ OpenAI-compatible: นำเข้าไฟล์ 1,000 ตอน (1.5 วินาที), แปลตอนเดียว, แปลทุกตอนพร้อมกัน 2–3 ตอน, อ่านตอนที่เสร็จระหว่างแปล, ปุ่มหยุด, ปุ่มย้อนกลับของเบราว์เซอร์, ส่งออก .docx .epub .txt .zip (ไฟล์เปิดได้ XML ถูกต้อง ชื่อไฟล์ไทยใน zip เป็น UTF-8), สำรอง/กู้คืนจากหน้าแรก, จอมือถือ 390px ไม่ล้น
 - แปลจริงด้วย Gemini: 羅生門 ทั้งเรื่อง (5,754 ตัวอักษร) คำไม่ตรงอภิธานศัพท์ 0, อักษรหลุด 0 (ร่างแรกมีอักษรเกาหลี/อาหรับหลุด ระบบแก้เองครบ) วันนั้น Gemini ตอบ 503 บ่อย จึงเพิ่มการพักโมเดลที่ล่ม 3 นาที
 - บั๊กที่แก้: รายชื่อเรื่องหน้าแรกไม่อัปเดตหลังเปลี่ยนชื่อ, ตอนค้างสถานะ "กำลังแปล" หลังปิดหน้าเว็บกลางคัน, ปุ่มในแถวตอนหลุดออกนอกช่องตาราง, กล่องความคืบหน้าสีสว่างในธีมมืด, ปุ่มย้อนกลับออกจากเว็บ
+
+## 2026-10-22 — parallel run + fix pass (real Gemini, gemini-3.5-flash-lite, 3 lanes)
+- Journey to the West ch1–5, 48 calls, 424 s, peak 3 concurrent. Problems per chapter before the fix pass 2/4/2/3/1 → after: 0 missing names everywhere, 1 leftover in ch1.
+- The leftover was Armenian "ակ" inside a Thai word (มหակัปป์ = มหากัปป์, look-alike glyphs). Whole-chunk fix requests kept copying it back.
+- New `patchLeftovers`: after the whole-chunk fixes, send only ~120 characters around each leftover and splice the reply back in (rejected if the glitch stays, new garbage appears or the length changes a lot). Real run: fixed in 1 call → "มหากัป". Unit test added (20 tests).

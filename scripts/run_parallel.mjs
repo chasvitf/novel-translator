@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCaller, PROVIDERS } from "../public/js/lib/providers.js";
-import { translateChapter, newChapter } from "../public/js/lib/pipeline.js";
+import { translateChapter, newChapter, recheckChapter, fixChapter } from "../public/js/lib/pipeline.js";
 import { splitChapters } from "../public/js/lib/split.js";
 import { checkTranslation } from "../public/js/lib/glossary.js";
 
@@ -58,6 +58,21 @@ async function worker() {
 }
 await Promise.all(Array.from({ length: lanes }, worker));
 
+// Same as the app after a run with the paid-key option: names learned in later chapters may be
+// missing from earlier ones, so every flagged chapter gets a fix pass.
+const check = (c) => checkTranslation(c.text, c.translation, project.glossary, project.srcLang, project.tgtLang);
+const before = project.chapters.filter((c) => c.translation).map((c) => { const r = check(c); return r.missing.length + r.leftovers.length; });
+const flagged = project.chapters.filter((c) => c.translation && recheckChapter(project, c)?.ok === false);
+console.log(`fix pass: ${flagged.length} chapters flagged (problems per chapter before: ${before.join("/")})`);
+for (const c of flagged) {
+  try {
+    await fixChapter(project, c, { call });
+    console.log(`   fixed ${c.title}: ${c.issues.ok ? "clean" : `${c.issues.missing.length + c.issues.leftovers.length} left`}`);
+  } catch (e) {
+    console.log(`   ✗ fix ${c.title}: ${e.message}`);
+  }
+}
+
 // Final check of every chapter against the glossary as it stands at the end (terms found later included).
 const rows = project.chapters.map((c) => {
   if (!c.translation) return { chapter: c.title.slice(0, 20), translated: false };
@@ -68,6 +83,6 @@ const outDir = path.join(root, "corpus", "out", "parallel");
 fs.mkdirSync(outDir, { recursive: true });
 for (const c of project.chapters) if (c.translation) fs.writeFileSync(path.join(outDir, `${String(project.chapters.indexOf(c) + 1).padStart(2, "0")}.th.txt`), `${c.titleT || c.title}\n\n${c.translation}\n`);
 fs.writeFileSync(path.join(outDir, "glossary.json"), JSON.stringify(project.glossary, null, 1));
-const summary = { lanes, seconds: Math.round((Date.now() - t0) / 1000), calls, peakConcurrent: peak, rateWaits, used, glossary: project.glossary.length, translated: rows.filter((r) => r.translated).length, of: rows.length, rows };
+const summary = { before, lanes, seconds: Math.round((Date.now() - t0) / 1000), calls, peakConcurrent: peak, rateWaits, used, glossary: project.glossary.length, translated: rows.filter((r) => r.translated).length, of: rows.length, rows };
 fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(summary, null, 1));
 console.log(JSON.stringify(summary, null, 1));
