@@ -78,3 +78,7 @@
 - Journey to the West ch1–5, 48 calls, 424 s, peak 3 concurrent. Problems per chapter before the fix pass 2/4/2/3/1 → after: 0 missing names everywhere, 1 leftover in ch1.
 - The leftover was Armenian "ակ" inside a Thai word (มหակัปป์ = มหากัปป์, look-alike glyphs). Whole-chunk fix requests kept copying it back.
 - New `patchLeftovers`: after the whole-chunk fixes, send only ~120 characters around each leftover and splice the reply back in (rejected if the glitch stays, new garbage appears or the length changes a lot). Real run: fixed in 1 call → "มหากัป". Unit test added (20 tests).
+
+## 2026-10-22 — export files
+- .epub (5 real chapters + a title with < & > "): epubcheck 5.1.0 → 0 fatals / 0 errors / 0 warnings.
+- .docx in Pages (AppleScript open → export PDF, 166 pages): BUG — every body paragraph was bold and centred like Heading1, because styles.xml had no default paragraph style. Added a `Normal` style (w:default="1", not bold, left) with Heading1 based on it; Pages now shows centred bold headings and normal indented body text. textutil also reads it. Not tried in Word (not installed).
