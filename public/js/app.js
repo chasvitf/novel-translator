@@ -1,7 +1,7 @@
 import { LANGS, GENRES, NAME_STYLES, langByCode, detectLang, chunkSizeFor } from "./lib/langs.js";
 import { splitChapters, chunkText } from "./lib/split.js";
 import { TERM_TYPES, typeName, makeEntry, parseCSV, toCSV, countInText, relevantEntries, issueCount } from "./lib/glossary.js";
-import { PROVIDERS, createCaller, listModels, withBackup } from "./lib/providers.js";
+import { PROVIDERS, createCaller, listModels } from "./lib/providers.js";
 import { translateChapter, recheckChapter, fixChapter, newChapter, runChapters, resetStuck as resetStuckChapters } from "./lib/pipeline.js";
 import * as store from "./lib/store.js";
 import * as files from "./lib/files.js";
@@ -414,7 +414,7 @@ async function runQueue(ids) {
     run.log.push(m);
     renderRunner();
   };
-  const mainCall = createCaller(aiConfig(), {
+  const call = createCaller(aiConfig(), {
     exhausted,
     onWait: (ms, why) => log(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`),
     onSwitch: (from, to, reason) => {
@@ -422,19 +422,9 @@ async function runQueue(ids) {
       log(`โมเดล ${from} ไม่พร้อม (${reason}) → สลับไปลอง ${to}`);
     },
   });
-  const mainReview = p.review
+  const reviewCall = p.review
     ? createCaller(reviewConfig(), { exhausted, onWait: (ms, why) => log(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`), onSwitch: () => store.prefs.set(`exhausted:${today()}`, [...exhausted]) })
-    : mainCall;
-  // Free Gemini runs out after a few dozen calls a day: carry on with Pollinations (no key, slower, weaker
-  // prose) so a run still finishes today. One backup caller for both, so its spacing is not doubled.
-  const free = ai().provider === "gemini" && !ai().paid;
-  const backup = free ? createCaller({ provider: "pollinations", model: PROVIDERS.pollinations.defaultModel, key: "" }, { onWait: (ms, why) => log(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`) }) : null;
-  const call = backup ? withBackup(mainCall, backup, () => {
-    const m = "โควตาฟรีของ Gemini วันนี้หมดแล้ว → แปลต่อด้วย Pollinations (ฟรี ช้ากว่า สำนวนด้อยกว่า)";
-    log(m);
-    toast(m);
-  }) : mainCall;
-  const reviewCall = !p.review ? call : backup ? withBackup(mainReview, backup) : mainReview;
+    : call;
   render();
   const working = new Map();
   const showCurrent = () => (run.current = [...working.values()].join(" · "));

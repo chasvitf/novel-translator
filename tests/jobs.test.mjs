@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { translateChapter, newChapter, runChapters, resetStuck, acceptFix } from "../public/js/lib/pipeline.js";
-import { createCaller, AIError, withBackup } from "../public/js/lib/providers.js";
+import { createCaller, AIError } from "../public/js/lib/providers.js";
 import { checkTranslation, makeEntry, issueCount } from "../public/js/lib/glossary.js";
 
 const project = (extra = {}) => ({ srcLang: "zh", tgtLang: "th", genre: "xianxia", nameStyle: "", custom: "", polish: false, autoFix: true, autoTerms: "off", glossary: [], chapters: [], ...extra });
@@ -414,30 +414,6 @@ test("a correction that returns the paragraph unchanged is not counted as fixed"
 test("a Latin letter glued to Thai letters is flagged as a leak", () => {
   assert.deepEqual(checkTranslation("林檎碧實", "ผลไม้ห้อยh้อยระย้า", [], "zh", "th").leftovers, ["h"]);
   assert.ok(checkTranslation("He said OK", "เขาบอกว่า OK แล้ว", [], "en", "th").ok, "a spaced Latin word stays allowed");
-});
-
-test("when the main AI's quota is gone, the job carries on with the backup and does not go back", async () => {
-  const p = book(6);
-  let mainCalls = 0;
-  const main = async ({ user }) => {
-    if (++mainCalls > 3) throw new AIError("quota", "all gone");
-    return { text: translateAll(user), model: "gemini" };
-  };
-  const backupUsed = [];
-  const backup = async ({ user }) => (backupUsed.push(user), { text: translateAll(user), model: "pollinations" });
-  let switched = 0;
-  const call = withBackup(main, backup, () => switched++);
-  const r = await runChapters(p, p.chapters, { call, lanes: 1 });
-  assert.equal(r.done, 6);
-  assert.equal(r.stopped, null);
-  assert.equal(switched, 1);
-  assert.equal(mainCalls, 4, "the main AI is not asked again after its quota ran out");
-  assert.deepEqual(p.chapters.map((c) => c.models[0]), ["gemini", "gemini", "gemini", "pollinations", "pollinations", "pollinations"]);
-});
-
-test("errors other than quota are not hidden by the backup", async () => {
-  const call = withBackup(async () => { throw new AIError("auth", "bad key"); }, async () => ({ text: "x" }), () => {});
-  await assert.rejects(call({}), { kind: "auth" });
 });
 
 test("a request's onStart fires after its turn comes up, so waiting in line does not count as the AI being slow", async (t) => {

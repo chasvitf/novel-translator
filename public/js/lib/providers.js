@@ -387,20 +387,3 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
     }
   };
 }
-
-// Once `main` has run out of quota on every model, send this and every later call to `backup`.
-export function withBackup(main, backup, onSwitch) {
-  let switched = false;
-  return async function call(req) {
-    if (!switched) {
-      try {
-        return await main(req);
-      } catch (e) {
-        if (e.kind !== "quota") throw e;
-        switched = true;
-        onSwitch?.(e);
-      }
-    }
-    return backup(req);
-  };
-}
