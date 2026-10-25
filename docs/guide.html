@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>คู่มือ Novel Lock</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Noto+Serif+Thai:wght@600&display=swap">
+<style>
+  /* Print source for public/guide.pdf; same content as the claude.ai guide artifact. */
+  @page { size: A4; margin: 16mm 16mm 18mm; }
+  :root {
+    --paper: #ffffff; --card: #ffffff; --ink: #1d1a17; --ink-2: #5b544c; --line: #e4ddd2; --soft: #f0ebe2;
+    --accent: #b42318; --accent-ink: #ffffff; --accent-soft: #fbe9e6; --warn-soft: #fdf0d8; --warn: #8a5100;
+    --ui: "IBM Plex Sans Thai", system-ui, sans-serif;
+    --read: "Noto Serif Thai", "IBM Plex Sans Thai", serif;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 11.5pt/1.7 var(--ui); }
+  main { display: grid; gap: 22px; }
+  h1, h2 { font-family: var(--read); font-weight: 600; margin: 0; }
+  h1 { font-size: 22pt; line-height: 1.35; }
+  h2 { font-size: 14pt; line-height: 1.4; }
+  p { margin: 0; }
+  .lede { color: var(--ink-2); }
+  header { display: grid; gap: 10px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 9.5pt; letter-spacing: 0.04em; }
+  .site { display: inline-block; background: var(--accent); color: var(--accent-ink); text-decoration: none; font-weight: 600; padding: 8px 18px; border-radius: 8px; justify-self: start; }
+  .facts { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 10px; }
+  .facts div { padding: 12px; display: grid; gap: 2px; align-content: start; }
+  .facts div + div { border-left: 1px solid var(--line); }
+  .facts b { font: 600 16pt/1.2 var(--read); }
+  .facts span { font-size: 9.5pt; color: var(--ink-2); line-height: 1.5; }
+  section { display: grid; gap: 8px; break-inside: avoid; }
+  ol, ul { margin: 0; padding-left: 1.4rem; display: grid; gap: 5px; }
+  li::marker { color: var(--accent); font-weight: 600; }
+  ul.sub { margin-top: 4px; gap: 2px; }
+  .tag { display: inline-block; font-size: 9pt; font-weight: 600; border-radius: 5px; padding: 0 7px; background: var(--soft); border: 1px solid var(--line); }
+  .on { background: var(--accent-soft); border-color: transparent; }
+  .note { background: var(--warn-soft); border-radius: 8px; padding: 10px 14px; font-size: 10.5pt; }
+  .note b { color: var(--warn); }
+  a { color: var(--accent); }
+  footer { color: var(--ink-2); font-size: 9pt; border-top: 1px solid var(--line); padding-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M4 7c4-1.5 8-1.5 12 1 4-2.5 8-2.5 12-1v18c-4-1.5-8-1.5-12 1-4-2.5-8-2.5-12-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M16 8v18" stroke="currentColor" stroke-width="2"/></svg>
+      NOVEL LOCK · แปลนิยายด้วย AI แบบชื่อไม่เพี้ยน
+    </div>
+    <h1>คู่มือใช้งาน Novel Lock</h1>
+    <p class="lede">แปลนิยายจีน ญี่ปุ่น เกาหลี และภาษาอื่นเป็นไทยทีละหลายตอน ระบบจำชื่อตัวละคร สถานที่ และวิชาไว้ ทุกตอนจึงใช้ชื่อเดียวกัน</p>
+    <a class="site" href="https://novel-th.vercel.app">novel-th.vercel.app</a>
+  </header>
+
+  <section>
+    <h2>ใช้ Gemini ฟรี ได้เท่าไหร่</h2>
+    <div class="facts">
+      <div><b>~80 ตอน</b><span>ต่อวัน (อาจมากกว่านี้)</span></div>
+      <div><b>~1 นาที</b><span>ต่อตอน ช่วงแรกของวันราว 2 นาที ช่วงหลังราว 45 วินาที</span></div>
+      <div><b>14:00–15:00</b><span>โควตาฟรีรีเซ็ตทุกวัน (เวลาไทย)</span></div>
+    </div>
+    <p class="lede">ทดสอบกับตอนยาวราว 6,000 ตัวอักษรจีน ด้วยการตั้งค่าแบบประหยัดด้านล่าง ถ้าโควตาหมดกลางทาง ตอนที่แปลแล้วไม่หาย วันถัดไปกด “แปลที่ยังไม่แปล” ระบบจะแปลต่อจากตอนที่ค้างไว้</p>
+  </section>
+
+  <section>
+    <h2>ตั้งค่าครั้งแรก</h2>
+    <ol>
+      <li>ขอ API key ฟรีที่ <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a> กด “Create API key” (ไม่ต้องผูกบัตร)</li>
+      <li>ในเว็บ ไปที่ <b>ตั้งค่า AI</b> เลือก <b>Google Gemini</b> แล้ววาง key</li>
+      <li>กลับไปหน้าแรก กด <b>สร้างเรื่องใหม่</b> แล้วลากไฟล์นิยาย (.txt .docx .epub) มาวาง หรือวางข้อความ ระบบแยกตอนให้เอง</li>
+      <li>ไปที่ <b>ตั้งค่าเรื่อง</b> เพื่อให้ได้จำนวนตอนต่อวันมากที่สุด
+        <ul class="sub">
+          <li>“ตรวจและแก้ชื่อที่เพี้ยนอัตโนมัติ” <span class="tag">ปิด</span></li>
+          <li>เปิด “ตั้งค่าขั้นสูง” แล้วตั้งขนาดท่อนเป็น <span class="tag">8000</span></li>
+          <li>“จำชื่อใหม่ให้อัตโนมัติ” <span class="tag on">เปิดไว้</span> ทำให้ชื่อตัวละครตรงกันทุกตอน</li>
+        </ul>
+      </li>
+      <li>กลับไปแท็บ <b>ตอน</b> แล้วกด <b>แปลที่ยังไม่แปล</b> ระหว่างแปลอ่านตอนที่เสร็จแล้วได้เลย</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>ใช้บนมือถือ Android</h2>
+    <ul>
+      <li>ระหว่างแปล เปิดหน้าเว็บค้างไว้ หน้าจอจะไม่ดับเอง</li>
+      <li>ถ้าสลับไปแอปอื่น การแปลจะหยุดชั่วคราว กลับมาเปิดเว็บแล้วระบบแปลต่อเอง</li>
+      <li>ถ้าแปลหลายสิบตอน แนะนำให้เสียบชาร์จไว้</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>ตอนที่ขึ้นป้าย “มีจุดต้องเช็ก”</h2>
+    <p>กด <b>แก้ทุกตอนที่มีจุดต้องเช็ก</b> ให้ AI แก้ชื่อที่ไม่ตรง ข้อความที่ยังไม่ได้แปล และย่อหน้าที่ขาด จุดที่ยังค้างหลังกดแก้ ควรเปิดอ่านเทียบต้นฉบับเอง</p>
+    <p class="note"><b>สำคัญ:</b> ระบบตรวจอัตโนมัติช่วยชี้จุดที่น่าสงสัยเท่านั้น ตอนที่ไม่มีป้ายไม่ได้แปลว่าแปลถูกทุกประโยค</p>
+  </section>
+
+  <section>
+    <h2>ข้อมูลและการสำรอง</h2>
+    <ul>
+      <li>นิยายและคำแปลเก็บในเบราว์เซอร์ของเครื่องที่ใช้เท่านั้น ไม่มีเซิร์ฟเวอร์กลาง key ส่งตรงไปที่ Google</li>
+      <li>ถ้าล้างข้อมูลเบราว์เซอร์ ข้อมูลจะหาย กด <b>ดาวน์โหลดไฟล์สำรอง .json</b> ในแท็บ <b>ส่งออก</b> เป็นระยะ</li>
+      <li>ย้ายไปเครื่องอื่น: เปิดเว็บบนเครื่องใหม่ แล้วกด <b>กู้คืนจากไฟล์สำรอง</b> ที่หน้าแรก</li>
+      <li>ส่งออกเป็น Word (.docx) หรือ E-book (.epub) ได้ที่แท็บ <b>ส่งออก</b></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>ถ้าต้องการแปลไม่จำกัดต่อวัน</h2>
+    <ol>
+      <li>เปิดการชำระเงินในโปรเจกต์ Google ที่ใช้สร้าง key (ใช้ key เดิมได้)</li>
+      <li>ในหน้า <b>ตั้งค่า AI</b> ติ๊ก <b>key แบบเสียเงิน</b> และตั้งแปลพร้อมกัน 3–5 ตอน</li>
+    </ol>
+    <p>ค่าใช้จ่ายประมาณ <b>$5–25 ต่อ 100 ตอน</b> แนะนำให้ลองแปล 10 ตอน แล้วดูยอดจริงในหน้า billing ของ Google ก่อน</p>
+  </section>
+
+  <footer>ตัวเลขทั้งหมดได้จากการทดสอบจริงเมื่อ 25 ต.ค. 2026 · Google อาจปรับโควตาฟรีได้ทุกเมื่อ · ถ้าใช้ key เดียวกันหลายเครื่อง โควตาจะนับรวมกัน</footer>
+</main>
+</body>
+</html>
