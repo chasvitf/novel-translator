@@ -283,12 +283,10 @@ const STATUS = {
 function chapterBadge(c) {
   const [t, cls] = STATUS[c.status] || STATUS.new;
   const status = `<span class="badge ${cls}" ${c.error ? `title="${esc(c.error)}"` : ""}>${t}</span>`;
-  const n = c.status === "done" ? issueCount(c.issues, c.review) : 0;
-  const issues = n ? `<span class="badge warn" title="${esc(issueTitle(c))}">มีจุดต้องเช็ก ${n}</span>` : "";
-  return `${status}${issues}`;
+  return status;
 }
 
-// What the automatic checks found, in one line per kind (for a tooltip and the reader).
+// What the automatic checks found, in one line per kind (for the reader).
 function issueLines(c) {
   const i = c.issues || { missing: [], leftovers: [], structure: [] };
   const kind = { paragraphs: (s) => `ย่อหน้าไม่ครบ: ต้นฉบับ ${s.src} ย่อหน้า คำแปล ${s.out} ย่อหน้า`, short: (s) => `ย่อหน้าสั้นผิดปกติ อาจแปลไม่ครบ: “${s.src}”`, dialogue: (s) => `บทพูดไม่มีเครื่องหมายคำพูด: “${s.src}”` };
@@ -299,7 +297,6 @@ function issueLines(c) {
     ...(c.review?.unresolved || []).map((r) => `AI ตรวจพบ (${r.type}): ${r.problem} · “${r.source}”`),
   ];
 }
-const issueTitle = (c) => issueLines(c).join("\n");
 
 function estimateCalls(p, chapters) {
   const size = Number(p.chunkSize) || chunkSizeFor(p.srcLang);
@@ -322,7 +319,6 @@ function viewChapters() {
     .join("");
   const todo = p.chapters.filter((c) => !c.translation);
   const sel = p.chapters.filter((c) => state.selected.has(c.id));
-  const flagged = p.chapters.filter((c) => c.translation && issueCount(c.issues, c.review));
   const pending = state.pendingImport;
   return `
   <div class="card">
@@ -350,7 +346,6 @@ function viewChapters() {
       <h2 class="grow" style="margin:0">ตอนทั้งหมด (${p.chapters.length})</h2>
       ${sel.length ? `<button class="btn" data-action="clear-select">ยกเลิกเลือก</button><button class="btn primary" data-action="translate-selected" ${busy() ? "disabled" : ""}>แปลที่เลือก ${sel.length} ตอน</button>` : ""}
       ${todo.length ? `<button class="btn ${sel.length ? "" : "primary"}" data-action="translate-todo" ${busy() ? "disabled" : ""}>แปลที่ยังไม่แปล (${todo.length})</button>` : ""}
-      ${flagged.length ? `<button class="btn" data-action="fix-all" ${busy() ? "disabled" : ""}>แก้ทุกตอนที่มีจุดต้องเช็ก (${flagged.length})</button>` : ""}
     </div>
     ${todo.length || sel.length ? `<p class="small muted">ประมาณ ${fmt(estimateCalls(p, sel.length ? sel : todo))} ครั้งที่เรียก AI${ai().provider === "gemini" ? " · Gemini ฟรีได้ราว 20 ครั้ง/วัน/โมเดล ระบบสลับโมเดลให้เองเมื่อโควตาหมด" : ""}</p>` : ""}
     ${!aiReady() ? `<div class="issues">ยังไม่ได้ตั้งค่า AI · <a href="#" data-action="view" data-view="ai">ตั้งค่าตอนนี้</a> (Gemini ฟรี ใช้เวลา 1 นาที)</div>` : ""}
@@ -482,8 +477,7 @@ async function runQueue(ids) {
         run.firstId ??= ch.id;
         tokens.calls += ch.stats?.calls || 0;
         tokens.tokens += ch.stats?.tokens || 0;
-        const n = issueCount(ch.issues, ch.review);
-        log(`✓ ${ch.titleT || ch.title}${n ? ` (มีจุดต้องเช็ก ${n})` : ""}`);
+        log(`✓ ${ch.titleT || ch.title}`);
       } else if (e.name !== "AbortError") log(`✗ ${ch.title}: ${e.message}`);
       working.delete(ch.id);
       showCurrent();
@@ -511,14 +505,13 @@ async function runQueue(ids) {
   save(true);
   render();
   if (flagged.length && !stopped && ai().paid) {
-    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน · กำลังแก้ ${flagged.length} ตอนที่มีจุดต้องเช็ก`);
+    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน`);
     const firstId = run.firstId;
     await fixQueue(flagged);
     if (state.run) state.run.firstId = firstId;
     renderRunner();
     return;
   }
-  if (flagged.length) log(`มี ${flagged.length} ตอนที่มีจุดต้องเช็ก · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
   toast(`แปลเสร็จ ${run.done}/${run.total} ตอน${run.added ? ` · คำใหม่ ${run.added} คำ` : ""}`);
 }
 
@@ -1087,7 +1080,6 @@ const actions = {
     render();
   },
   "translate-selected": () => runQueue(state.project.chapters.filter((c) => state.selected.has(c.id)).map((c) => c.id)),
-  "fix-all": () => fixQueue(state.project.chapters.filter((c) => c.translation && issueCount(c.issues, c.review))),
   "translate-todo": () => runQueue(state.project.chapters.filter((c) => !c.translation).map((c) => c.id)),
   "translate-one": (el) => {
     const c = state.project.chapters.find((x) => x.id === el.dataset.id);
