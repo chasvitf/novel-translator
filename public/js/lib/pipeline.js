@@ -423,9 +423,14 @@ function mergeIssues(list) {
 }
 
 // Re-run the glossary check on a whole chapter (after editing the text or the glossary).
+// Chunk by chunk while the chunks still make up the translation (not edited by hand since): paragraphs
+// line up only within a chunk, and comparing them across the whole chapter flagged the wrong ones.
+const chunksInSync = (chapter) => chapter.chunks?.length > 0 && chapter.chunks.map((c) => c.out).join("\n\n") === chapter.translation;
+
 export function recheckChapter(project, chapter) {
   if (!chapter.translation) return null;
-  chapter.issues = checkTranslation(chapter.text, chapter.translation, project.glossary, project.srcLang, project.tgtLang);
+  const check = (src, out) => checkTranslation(src, out, project.glossary, project.srcLang, project.tgtLang);
+  chapter.issues = chunksInSync(chapter) ? mergeIssues(chapter.chunks.map((c) => (c.issues = check(c.src, c.out)))) : check(chapter.text, chapter.translation);
   return chapter.issues;
 }
 
@@ -434,7 +439,7 @@ export async function fixChapter(project, chapter, { call, signal, onProgress = 
   chapter.status = "working";
   chapter.error = "";
   try {
-    const inSync = chapter.chunks?.length && chapter.chunks.map((c) => c.out).join("\n\n") === chapter.translation;
+    const inSync = chunksInSync(chapter);
     const pieces = inSync ? chapter.chunks : [{ src: chapter.text, out: chapter.translation }];
     for (let i = 0; i < pieces.length; i++) {
       const c = pieces[i];

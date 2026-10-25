@@ -143,6 +143,12 @@ async function openProject(id) {
     await store.saveProject(state.project);
   }
   resetStuck(state.project);
+  // Counts saved before checks went chunk by chunk compared paragraphs across chunks: redo them once.
+  if (state.project.checked !== 2) {
+    state.project.chapters.forEach((c) => recheckChapter(state.project, c));
+    state.project.checked = 2;
+    await store.saveProject(state.project);
+  }
   store.prefs.set("last", id);
   state.selected = new Set();
   state.chapterId = state.project.chapters[0]?.id || null;

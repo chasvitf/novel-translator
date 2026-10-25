@@ -2,7 +2,7 @@
 // a fake: no test spends API quota.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { translateChapter, newChapter, runChapters, resetStuck, acceptFix } from "../public/js/lib/pipeline.js";
+import { translateChapter, newChapter, runChapters, resetStuck, acceptFix, recheckChapter, fixChapter } from "../public/js/lib/pipeline.js";
 import { createCaller, AIError } from "../public/js/lib/providers.js";
 import { checkTranslation, makeEntry, issueCount } from "../public/js/lib/glossary.js";
 
@@ -468,4 +468,36 @@ test("a chapter whose every reply is a refusal ends as an error, not as done", a
   await assert.rejects(translateChapter(p, ch, { call: async () => ({ text: "ขออภัย" }) }));
   assert.equal(ch.status, "error");
   assert.equal(ch.translation, "");
+});
+
+// Reported by the user: "แก้ทุกตอนที่มีจุดต้องเช็ก" left more problems than before. One chunk's translation
+// split a paragraph (+1) and another merged two (-1), so whole-chapter totals matched and every paragraph
+// after the split was compared with the wrong one.
+const SPLIT_SRC = ["「甲說話了很久很久很久。」", "乙走了。", "丙站在山頂上看著遠方的白雲，心裡想了很久很久很久很久。", "「丁問道你好嗎？」"].join("\n\n");
+const splitProject = () => project({ autoFix: false, chunkSize: 40 });
+const splitCall = async ({ user }) => ({
+  text: passageOf(user).includes("甲")
+    ? "“ก พูดอยู่นานมาก นานมาก”\n\n“นานมากจริงๆ”\n\nข เดินจากไป"
+    : "ค ยืนอยู่บนยอดเขา มองเมฆขาวที่อยู่ไกลออกไป และครุ่นคิดอยู่นานแสนนาน “ง ถามว่า สบายดีไหม”",
+});
+
+test("re-checking a chapter checks each chunk on its own, so paragraphs are never compared across chunks", async () => {
+  const p = splitProject();
+  const ch = newChapter("一", SPLIT_SRC);
+  p.chapters.push(ch);
+  await translateChapter(p, ch, { call: splitCall });
+  assert.equal(ch.chunks.length, 2);
+  const kinds = (recheckChapter(p, ch).structure || []).map((s) => s.kind);
+  assert.deepEqual(kinds, ["paragraphs"], "only the chunk that merged two paragraphs is flagged");
+});
+
+test("fixing a chapter never leaves more problems than it started with", async () => {
+  const p = splitProject();
+  const ch = newChapter("一", SPLIT_SRC);
+  p.chapters.push(ch);
+  await translateChapter(p, ch, { call: splitCall });
+  const before = issueCount(recheckChapter(p, ch));
+  // The repair answers with the merged chunk split back into two paragraphs.
+  await fixChapter(p, ch, { call: async ({ user }) => (passageOf(user).includes("丙") ? { text: "ค ยืนอยู่บนยอดเขา มองเมฆขาวที่อยู่ไกลออกไป และครุ่นคิดอยู่นานแสนนาน\n\n“ง ถามว่า สบายดีไหม”" } : splitCall({ user })) });
+  assert.ok(issueCount(ch.issues) <= before, `before ${before}, after ${issueCount(ch.issues)}: ${JSON.stringify(ch.issues.structure)}`);
 });
