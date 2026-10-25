@@ -147,6 +147,12 @@ async function openProject(id) {
   state.selected = new Set();
   state.chapterId = state.project.chapters[0]?.id || null;
   go("chapters");
+  // A run cut off by the page closing (Android discards a tab left in the background) goes on by itself.
+  const left = store.prefs.get(`run:${id}`, []);
+  if (left.length && !busy()) {
+    toast(`แปลต่อจากที่ค้างไว้ ${left.length} ตอน`);
+    runQueue(left);
+  }
 }
 
 async function refreshProjects() {
@@ -429,6 +435,8 @@ async function runQueue(ids) {
   const working = new Map();
   const showCurrent = () => (run.current = [...working.values()].join(" · "));
   const tokens = { calls: 0, tokens: 0 };
+  const left = new Set(queue.map((c) => c.id));
+  store.prefs.set(`run:${p.id}`, [...left]);
   // Android Chrome stops translating when the screen turns off: keep it on during the run. The browser
   // drops the lock whenever the tab is hidden, so take it again when the tab is shown.
   let wake = null;
@@ -461,6 +469,8 @@ async function runQueue(ids) {
     },
     onChapter: async (ch, e) => {
       if (!e) {
+        left.delete(ch.id);
+        store.prefs.set(`run:${p.id}`, [...left]);
         run.done++;
         run.firstId ??= ch.id;
         tokens.calls += ch.stats?.calls || 0;
@@ -476,6 +486,7 @@ async function runQueue(ids) {
     },
   });
   running = false;
+  store.prefs.set(`run:${p.id}`, []); // finished or stopped on purpose: nothing to resume
   document.removeEventListener("visibilitychange", keepAwake);
   wake?.release().catch(() => {});
   const stopped = !!result.stopped;
