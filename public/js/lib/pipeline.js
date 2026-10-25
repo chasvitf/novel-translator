@@ -63,7 +63,7 @@ async function analyzeChapterWithTimeout(project, chapter, call, signal) {
   const abortFromRun = () => controller.abort();
   signal?.addEventListener("abort", abortFromRun, { once: true });
   if (signal?.aborted) controller.abort();
-  // The clock starts when the request is sent: on Pollinations the wait for a turn alone is 31 seconds.
+  // The clock starts when the request is sent: with several workers the wait for a turn can be long by itself.
   let timer;
   const start = () => {
     clearTimeout(timer);

@@ -90,7 +90,7 @@ function reviewConfig() {
 
 function aiReady() {
   const c = aiConfig();
-  return PROVIDERS[c.provider].noKey || c.provider === "custom" || !!c.key;
+  return c.provider === "custom" || !!c.key;
 }
 
 function renderPill() {
@@ -911,7 +911,7 @@ function viewAI() {
     <h2>${esc(p.name)}</h2>
     <p class="small muted">${esc(p.keyHelp)}${p.keyUrl ? ` · <a href="${p.keyUrl}" target="_blank" rel="noopener">เปิดหน้าขอ key ↗</a>` : ""}</p>
     <div class="grid2">
-      ${p.noKey ? "" : `<label class="field"><span>API key${a.provider === "custom" ? " (ถ้ามี)" : ""}</span><input type="password" id="aiKey" value="${esc(a.keys[a.provider] || "")}" autocomplete="off" spellcheck="false" placeholder="วาง key ที่นี่"></label>`}
+      <label class="field"><span>API key${a.provider === "custom" ? " (ถ้ามี)" : ""}</span><input type="password" id="aiKey" value="${esc(a.keys[a.provider] || "")}" autocomplete="off" spellcheck="false" placeholder="วาง key ที่นี่"></label>
       ${a.provider === "custom" ? `<label class="field"><span>Base URL</span><input type="url" id="aiBase" value="${esc(a.base)}" placeholder="http://localhost:11434/v1"></label>` : ""}
       <label class="field"><span>โมเดล</span><div class="row" style="flex-wrap:nowrap"><input type="text" id="aiModel" list="modelList" value="${esc(a.model || p.defaultModel)}"><datalist id="modelList">${models.map((m) => `<option value="${esc(m)}">`).join("")}</datalist><button class="btn sm" data-action="load-models" type="button">ดึงรายชื่อ</button></div></label>
     </div>
@@ -924,7 +924,7 @@ function viewAI() {
       <label class="field"><span>แปลพร้อมกันกี่ตอน</span><select id="aiParallel">${[1, 2, 3, 5, 8].map((n) => `<option value="${n}" ${n === Number(a.parallel) ? "selected" : ""}>${n} ตอน${n === 1 ? " (ทีละตอน)" : ""}</option>`).join("")}</select></label>
     </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aiPaid" ${a.paid ? "checked" : ""}><span>key นี้เป็นแบบเสียเงิน ไม่ต้องเว้นระยะรอโควตาฟรี</span></label>
-    <p class="small muted" style="margin:8px 0 0">key ฟรี (Gemini ฟรี, Groq, Pollinations) ใช้ 1 ตอน · key เสียเงิน (OpenAI, Claude, Gemini แบบผูกบัตร) ติ๊กช่องนี้แล้วตั้ง 3–5 ตอน จะเร็วขึ้นหลายเท่า · ชื่อที่ระบบจำได้ใช้ร่วมกันทุกตอน ชื่อใหม่ที่เจอจะถูกจำและใช้กับตอนถัดไปทันที</p>
+    <p class="small muted" style="margin:8px 0 0">key ฟรี (Gemini ฟรี, Groq) ใช้ 1 ตอน · key เสียเงิน (OpenAI, Claude, Gemini แบบผูกบัตร) ติ๊กช่องนี้แล้วตั้ง 3–5 ตอน จะเร็วขึ้นหลายเท่า · ชื่อที่ระบบจำได้ใช้ร่วมกันทุกตอน ชื่อใหม่ที่เจอจะถูกจำและใช้กับตอนถัดไปทันที</p>
     ${exhaustedSet().size ? `<p class="small muted" style="margin:10px 0 0">โควตาฟรีวันนี้หมดแล้ว: ${esc([...exhaustedSet()].map((k) => k.split("/").slice(1).join("/")).join(", "))} · <a href="#" data-action="reset-quota">ล้าง (ถ้าโควตารีเซ็ตแล้ว)</a></p>` : ""}
   </div>
   <div class="card small muted">key เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น และส่งตรงไปที่ ${esc(p.name)} · ถ้าใช้เครื่องคนอื่น กดล้าง key ก่อนออก <button class="btn sm" data-action="clear-key">ล้าง key</button></div>

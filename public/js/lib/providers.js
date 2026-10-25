@@ -13,17 +13,6 @@ export const PROVIDERS = {
     minIntervalMs: 4500,
     tested: true,
   },
-  pollinations: {
-    name: "Pollinations (ไม่ต้องมี key)",
-    badge: "ฟรี · ไม่ต้องสมัคร · ช้า · คุณภาพต่ำกว่า",
-    noKey: true,
-    keyHelp: "ไม่ต้องมี key แต่ช้า (1 ครั้งต่อ 30 วินาที) และสำนวนด้อยกว่า Gemini ใช้งานจริงแนะนำ Gemini",
-    endpoint: "https://text.pollinations.ai/openai",
-    defaultModel: "openai",
-    models: ["openai"],
-    minIntervalMs: 31000,
-    tested: true,
-  },
   groq: {
     name: "Groq",
     badge: "ต้องมี key · คิดค่าบริการตาม token",
@@ -163,10 +152,9 @@ async function geminiModels(cfg) {
     .map((m) => m.name.replace(/^models\//, ""));
 }
 
-// ---------- OpenAI-compatible (Groq, OpenRouter, OpenAI, Pollinations, Ollama…) ----------
+// ---------- OpenAI-compatible (Groq, OpenRouter, OpenAI, Ollama…) ----------
 
 function compatUrl(p, cfg) {
-  if (p.endpoint) return p.endpoint;
   const base = (cfg.base || p.base || "").replace(/\/+$/, "");
   if (!base) throw new AIError("bad", "ยังไม่ได้ใส่ URL ของผู้ให้บริการ");
   return `${base}/chat/completions`;
@@ -189,9 +177,7 @@ async function compat(cfg, { system, user, json, signal }) {
   };
   // Reasoning models on OpenAI reject a custom temperature.
   if (cfg.provider !== "openai") body.temperature = json ? 0.2 : 0.7;
-  if (json && cfg.provider !== "pollinations") body.response_format = { type: "json_object" };
-  // Pollinations' "openai" is a reasoning model: with default effort it can spend the whole budget thinking.
-  if (cfg.provider === "pollinations") Object.assign(body, { reasoning_effort: "low", max_tokens: 16000 });
+  if (json) body.response_format = { type: "json_object" };
   const d = await post(compatUrl(p, cfg), headers, body, signal);
   if (typeof d === "string") return { text: d, usage: 0 };
   const choice = d.choices?.[0];
@@ -205,7 +191,6 @@ async function compat(cfg, { system, user, json, signal }) {
 
 async function compatModels(cfg) {
   const p = PROVIDERS[cfg.provider];
-  if (p.endpoint) return p.models;
   const base = (cfg.base || p.base || "").replace(/\/+$/, "");
   const r = await fetch(`${base}/models`, { headers: cfg.key ? { Authorization: `Bearer ${cfg.key}` } : {} });
   if (!r.ok) throw httpError(r, await r.json().catch(() => null), "");
@@ -274,7 +259,7 @@ async function anthropicModels(cfg) {
 
 export function complete(cfg, req) {
   if (!PROVIDERS[cfg.provider]) throw new AIError("bad", "ไม่รู้จักผู้ให้บริการนี้");
-  if (!cfg.key && !PROVIDERS[cfg.provider].noKey && cfg.provider !== "custom") throw new AIError("auth", "ยังไม่ได้ใส่ API key");
+  if (!cfg.key && cfg.provider !== "custom") throw new AIError("auth", "ยังไม่ได้ใส่ API key");
   if (cfg.provider === "gemini") return gemini(cfg, req);
   if (cfg.provider === "anthropic") return anthropic(cfg, req);
   return compat(cfg, req);
