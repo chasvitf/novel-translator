@@ -429,6 +429,18 @@ async function runQueue(ids) {
   const working = new Map();
   const showCurrent = () => (run.current = [...working.values()].join(" · "));
   const tokens = { calls: 0, tokens: 0 };
+  // Android Chrome stops translating when the screen turns off: keep it on during the run. The browser
+  // drops the lock whenever the tab is hidden, so take it again when the tab is shown.
+  let wake = null;
+  let running = true;
+  const keepAwake = async () => {
+    if (document.visibilityState !== "visible") return;
+    const lock = await navigator.wakeLock?.request("screen").catch(() => null);
+    if (running) wake = lock;
+    else lock?.release().catch(() => {});
+  };
+  document.addEventListener("visibilitychange", keepAwake);
+  await keepAwake();
   const result = await runChapters(p, queue, {
     call,
     reviewCall,
@@ -463,6 +475,9 @@ async function runQueue(ids) {
       if (state.view !== "read" && state.view !== "book") render();
     },
   });
+  running = false;
+  document.removeEventListener("visibilitychange", keepAwake);
+  wake?.release().catch(() => {});
   const stopped = !!result.stopped;
   if (result.stopped === "cancelled") log("หยุดแล้ว");
   if (result.stopped === "failing") {
