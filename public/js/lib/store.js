@@ -27,10 +27,37 @@ async function tx(mode, fn) {
 export const listProjects = () => tx("readonly", (s) => s.getAll());
 export const getProject = (id) => tx("readonly", (s) => s.get(id));
 export const deleteProject = (id) => tx("readwrite", (s) => s.delete(id));
-export function saveProject(p) {
-  p.updatedAt = Date.now();
-  // Structured clone drops nothing we need; strip transient fields.
-  return tx("readwrite", (s) => s.put(JSON.parse(JSON.stringify(p))));
+// Each save bumps `rev`. A save whose rev does not match the stored one was loaded before another tab
+// saved the same story; writing it would wipe that tab's chapters, so it is refused instead.
+export async function saveProject(p) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const t = d.transaction(STORE, "readwrite");
+    const s = t.objectStore(STORE);
+    let conflict = false;
+    let bumped = false;
+    s.get(p.id).onsuccess = (e) => {
+      const stored = e.target.result;
+      if (stored && (stored.rev || 0) !== (p.rev || 0)) {
+        conflict = true;
+        return t.abort();
+      }
+      p.rev = (p.rev || 0) + 1;
+      bumped = true;
+      p.updatedAt = Date.now();
+      // Drop the pre-fix drafts kept in memory for test scripts: a quarter of a 1,000-chapter project.
+      s.put(JSON.parse(JSON.stringify(p, (k, v) => (k === "draft" ? undefined : v))));
+    };
+    t.oncomplete = () => resolve();
+    t.onabort = t.onerror = () => {
+      // A failed write (disk full) must not make every later save look like a conflict; error and abort both fire.
+      if (bumped) {
+        p.rev--;
+        bumped = false;
+      }
+      reject(conflict ? new Error("เรื่องนี้ถูกแก้จากแท็บหรือหน้าต่างอื่น ปิดแท็บอื่นแล้วโหลดหน้านี้ใหม่") : t.error);
+    };
+  });
 }
 
 export const prefs = {

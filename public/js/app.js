@@ -1,8 +1,8 @@
 import { LANGS, GENRES, NAME_STYLES, langByCode, detectLang, chunkSizeFor } from "./lib/langs.js";
 import { splitChapters, chunkText } from "./lib/split.js";
-import { TERM_TYPES, typeName, makeEntry, parseCSV, toCSV, countInText, relevantEntries } from "./lib/glossary.js";
-import { PROVIDERS, createCaller, listModels } from "./lib/providers.js";
-import { translateChapter, recheckChapter, fixChapter, newChapter } from "./lib/pipeline.js";
+import { TERM_TYPES, typeName, makeEntry, parseCSV, toCSV, countInText, relevantEntries, issueCount } from "./lib/glossary.js";
+import { PROVIDERS, createCaller, listModels, withBackup } from "./lib/providers.js";
+import { translateChapter, recheckChapter, fixChapter, newChapter, runChapters, resetStuck as resetStuckChapters } from "./lib/pipeline.js";
 import * as store from "./lib/store.js";
 import * as files from "./lib/files.js";
 
@@ -26,7 +26,41 @@ const state = {
 // ---------------- AI settings (per device) ----------------
 
 const DEFAULT_AI = { provider: "gemini", model: PROVIDERS.gemini.defaultModel, keys: {}, base: "", fallback: true, models: {}, parallel: 1, paid: false };
-const ai = () => ({ ...DEFAULT_AI, ...store.prefs.get("ai", {}) });
+const ai = () => {
+  const savedSettings = store.prefs.get("ai", {}) || {};
+  const settings = { ...DEFAULT_AI, ...savedSettings };
+  if (!PROVIDERS[settings.provider]) {
+    settings.provider = DEFAULT_AI.provider;
+    settings.model = DEFAULT_AI.model;
+    store.prefs.set("ai", settings);
+  }
+  const groqReplacements = {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "qwen/qwen3-32b": "openai/gpt-oss-120b",
+  };
+  const savedGroqModels = settings.models?.groq || [];
+  const migratedGroqModels = [...new Set(savedGroqModels.map((model) => groqReplacements[model] || model))];
+  const savedLastGroqModel = settings.models?.["last:groq"];
+  const migratedLastGroqModel = groqReplacements[savedLastGroqModel] || savedLastGroqModel;
+  if (settings.model && settings.provider === "groq" && groqReplacements[settings.model]) {
+    settings.model = groqReplacements[settings.model];
+  }
+  if (savedGroqModels.some((model) => groqReplacements[model]) || migratedLastGroqModel !== savedLastGroqModel) {
+    settings.models = { ...settings.models, groq: migratedGroqModels, ...(migratedLastGroqModel ? { "last:groq": migratedLastGroqModel } : {}) };
+  }
+  // Roll back the model value saved by the recent 3.8-default release. Mark it once so users can
+  // deliberately select 3.8 again later without the migration overriding their choice.
+  const groqMigrated = (savedSettings.provider === "groq" && !!groqReplacements[savedSettings.model]) || migratedGroqModels.some((model, i) => model !== savedGroqModels[i]) || migratedLastGroqModel !== savedLastGroqModel;
+  if (groqMigrated) {
+    store.prefs.set("ai", settings);
+  }
+  if (settings.provider === "gemini" && settings.model === "gemini-3.8-flash" && settings.geminiRollback !== "3.5") {
+    settings.model = PROVIDERS.gemini.defaultModel;
+    settings.geminiRollback = "3.5";
+    store.prefs.set("ai", settings);
+  }
+  return settings;
+};
 const saveAI = (patch) => store.prefs.set("ai", { ...ai(), ...patch });
 // Gemini free quotas reset at midnight Pacific time.
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
@@ -44,6 +78,14 @@ function aiConfig() {
 function orderFallbacks(provider, listed) {
   const curated = PROVIDERS[provider].models.filter((m) => listed.includes(m));
   return curated.length ? curated : listed.slice(0, 6);
+}
+
+// The independent check runs on another model of the same provider when there is one, so the model
+// that wrote a translation is not the only one judging it (and free quota is spread over two models).
+function reviewConfig() {
+  const c = aiConfig();
+  const other = c.fallbackModels.find((m) => m !== c.model);
+  return other ? { ...c, model: other, fallbackModels: [other, ...c.fallbackModels.filter((m) => m !== other)] } : c;
 }
 
 function aiReady() {
@@ -89,14 +131,17 @@ function save(now = false) {
   saveTimer = setTimeout(run, 400);
 }
 
-// A tab closed mid-run leaves chapters marked "working"; nothing is translating them any more.
 function resetStuck(p) {
-  for (const c of p.chapters) if (c.status === "working" && !busy()) c.status = c.translation ? "done" : "new";
+  if (!busy()) resetStuckChapters(p);
 }
 
 async function openProject(id) {
   state.project = await store.getProject(id);
   if (!state.project) return go("home");
+  if (Object.hasOwn(state.project, "translationMode")) {
+    delete state.project.translationMode;
+    await store.saveProject(state.project);
+  }
   resetStuck(state.project);
   store.prefs.set("last", id);
   state.selected = new Set();
@@ -218,19 +263,34 @@ async function newProjectDialog() {
 const STATUS = {
   new: ["ยังไม่แปล", ""],
   working: ["กำลังแปล", "run"],
-  done: ["เสร็จ", "ok"],
+  done: ["แปลเสร็จแล้ว", "ok"],
   error: ["ผิดพลาด", "err"],
 };
 
 function chapterBadge(c) {
-  if (c.status === "done" && c.issues && !c.issues.ok) return `<span class="badge warn">มีจุดต้องเช็ก ${c.issues.missing.length + c.issues.leftovers.length}</span>`;
   const [t, cls] = STATUS[c.status] || STATUS.new;
-  return `<span class="badge ${cls}" ${c.error ? `title="${esc(c.error)}"` : ""}>${t}</span>`;
+  const status = `<span class="badge ${cls}" ${c.error ? `title="${esc(c.error)}"` : ""}>${t}</span>`;
+  const n = c.status === "done" ? issueCount(c.issues, c.review) : 0;
+  const issues = n ? `<span class="badge warn" title="${esc(issueTitle(c))}">มีจุดต้องเช็ก ${n}</span>` : "";
+  return `${status}${issues}`;
 }
+
+// What the automatic checks found, in one line per kind (for a tooltip and the reader).
+function issueLines(c) {
+  const i = c.issues || { missing: [], leftovers: [], structure: [] };
+  const kind = { paragraphs: (s) => `ย่อหน้าไม่ครบ: ต้นฉบับ ${s.src} ย่อหน้า คำแปล ${s.out} ย่อหน้า`, short: (s) => `ย่อหน้าสั้นผิดปกติ อาจแปลไม่ครบ: “${s.src}”`, dialogue: (s) => `บทพูดไม่มีเครื่องหมายคำพูด: “${s.src}”` };
+  return [
+    ...i.missing.map((m) => `ชื่อไม่ตรง: ${m.entry.source} ต้องเป็น “${m.entry.target}”`),
+    ...i.leftovers.map((t) => `ยังไม่ได้แปล: ${t}`),
+    ...(i.structure || []).map((s) => kind[s.kind]?.(s) || s.kind),
+    ...(c.review?.unresolved || []).map((r) => `AI ตรวจพบ (${r.type}): ${r.problem} · “${r.source}”`),
+  ];
+}
+const issueTitle = (c) => issueLines(c).join("\n");
 
 function estimateCalls(p, chapters) {
   const size = Number(p.chunkSize) || chunkSizeFor(p.srcLang);
-  return chapters.reduce((n, c) => n + (p.autoTerms !== "off" ? 1 : 0) + chunkText(c.text, size).length * (p.polish ? 2 : 1), 0);
+  return chapters.reduce((n, c) => n + (p.autoTerms !== "off" ? 1 : 0) + chunkText(c.text, size).length * ((p.polish ? 2 : 1) + (p.review ? 1 : 0)), 0);
 }
 
 function viewChapters() {
@@ -249,7 +309,7 @@ function viewChapters() {
     .join("");
   const todo = p.chapters.filter((c) => !c.translation);
   const sel = p.chapters.filter((c) => state.selected.has(c.id));
-  const flagged = p.chapters.filter((c) => c.translation && c.issues && !c.issues.ok);
+  const flagged = p.chapters.filter((c) => c.translation && issueCount(c.issues, c.review));
   const pending = state.pendingImport;
   return `
   <div class="card">
@@ -343,8 +403,8 @@ function confirmImport(merge) {
 
 async function runQueue(ids) {
   if (busy()) return toast("กำลังแปลอยู่");
-  if (!aiReady()) return go("ai");
   const p = state.project;
+  if (!aiReady()) return go("ai");
   const queue = ids.map((id) => p.chapters.find((c) => c.id === id)).filter(Boolean);
   if (!queue.length) return;
   const abort = new AbortController();
@@ -354,85 +414,97 @@ async function runQueue(ids) {
     run.log.push(m);
     renderRunner();
   };
-  const call = createCaller(aiConfig(), {
+  const mainCall = createCaller(aiConfig(), {
     exhausted,
     onWait: (ms, why) => log(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`),
-    onSwitch: (from, to) => {
+    onSwitch: (from, to, reason) => {
       store.prefs.set(`exhausted:${today()}`, [...exhausted]);
-      log(`โควตา ${from} หมด → สลับไปใช้ ${to}`);
+      log(`โมเดล ${from} ไม่พร้อม (${reason}) → สลับไปลอง ${to}`);
     },
   });
+  const mainReview = p.review
+    ? createCaller(reviewConfig(), { exhausted, onWait: (ms, why) => log(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`), onSwitch: () => store.prefs.set(`exhausted:${today()}`, [...exhausted]) })
+    : mainCall;
+  // Free Gemini runs out after a few dozen calls a day: carry on with Pollinations (no key, slower, weaker
+  // prose) so a run still finishes today. One backup caller for both, so its spacing is not doubled.
+  const free = ai().provider === "gemini" && !ai().paid;
+  const backup = free ? createCaller({ provider: "pollinations", model: PROVIDERS.pollinations.defaultModel, key: "" }, { onWait: (ms, why) => log(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`) }) : null;
+  const call = backup ? withBackup(mainCall, backup, () => {
+    const m = "โควตาฟรีของ Gemini วันนี้หมดแล้ว → แปลต่อด้วย Pollinations (ฟรี ช้ากว่า สำนวนด้อยกว่า)";
+    log(m);
+    toast(m);
+  }) : mainCall;
+  const reviewCall = !p.review ? call : backup ? withBackup(mainReview, backup) : mainReview;
   render();
-  // Workers take chapters in order, so finished chapters appear one after another and can be read
-  // while the rest translate. The glossary is shared: terms found in one chapter apply to the next.
   const working = new Map();
   const showCurrent = () => (run.current = [...working.values()].join(" · "));
-  let next = 0;
-  let stopped = false;
-  async function worker() {
-    while (!stopped && next < queue.length) {
-      const ch = queue[next++];
+  const tokens = { calls: 0, tokens: 0 };
+  const result = await runChapters(p, queue, {
+    call,
+    reviewCall,
+    lanes: Number(ai().parallel) || 1,
+    signal: abort.signal,
+    onStart: (ch) => {
       working.set(ch.id, ch.titleT || ch.title);
       showCurrent();
       renderRunner();
-      try {
-        await translateChapter(p, ch, {
-          call,
-          signal: abort.signal,
-          onProgress: (e) => {
-            if (e.step === "terms") {
-              run.added += e.added.length;
-              if (e.added.length) log(`${ch.title}: พบคำใหม่ ${e.added.length} คำ (${e.added.slice(0, 5).map((t) => `${t.source}=${t.target}`).join(", ")}${e.added.length > 5 ? " …" : ""})`);
-            } else if (e.step === "warn") log(e.message);
-            else run.step = stepText(e);
-            renderRunner();
-          },
-        });
+    },
+    onProgress: (ch, e) => {
+      if (e.step === "terms") {
+        run.added += e.added.length;
+        if (e.added.length) log(`${ch.title}: พบคำใหม่ ${e.added.length} คำ (${e.added.slice(0, 5).map((t) => `${t.source}=${t.target}`).join(", ")}${e.added.length > 5 ? " …" : ""})`);
+      } else if (e.step === "warn") log(e.message);
+      else run.step = stepText(e);
+      renderRunner();
+    },
+    onChapter: async (ch, e) => {
+      if (!e) {
         run.done++;
         run.firstId ??= ch.id;
-        log(`✓ ${ch.titleT || ch.title}${ch.issues?.ok === false ? ` (มีจุดต้องเช็ก ${ch.issues.missing.length + ch.issues.leftovers.length})` : ""}`);
-      } catch (e) {
-        if (e.name === "AbortError") {
-          if (!stopped) log("หยุดแล้ว");
-          stopped = true;
-        } else {
-          log(`✗ ${ch.title}: ${e.message}`);
-          if (e.kind === "auth" || e.kind === "quota") stopped = true;
-        }
-      } finally {
-        working.delete(ch.id);
-        showCurrent();
-        save(true);
-        if (state.view !== "read" && state.view !== "book") render();
-      }
-    }
+        tokens.calls += ch.stats?.calls || 0;
+        tokens.tokens += ch.stats?.tokens || 0;
+        const n = issueCount(ch.issues, ch.review);
+        log(`✓ ${ch.titleT || ch.title}${n ? ` (มีจุดต้องเช็ก ${n})` : ""}`);
+      } else if (e.name !== "AbortError") log(`✗ ${ch.title}: ${e.message}`);
+      working.delete(ch.id);
+      showCurrent();
+      // Each chapter is written to the device as soon as it finishes, so a closed tab loses at most the chapters in progress.
+      await save(true);
+      if (state.view !== "read" && state.view !== "book") render();
+    },
+  });
+  const stopped = !!result.stopped;
+  if (result.stopped === "cancelled") log("หยุดแล้ว");
+  if (result.stopped === "failing") {
+    const m = "AI ไม่ตอบติดกัน 3 ตอน (ผู้ให้บริการอาจล่ม) จึงหยุดไว้ก่อน ตอนที่เสร็จแล้วเก็บไว้ครบ ลองกด “แปลที่ยังไม่แปล” อีกครั้งภายหลัง";
+    log(m);
+    toast(m);
   }
-  const lanes = Math.max(1, Math.min(Number(ai().parallel) || 1, queue.length));
-  await Promise.all(Array.from({ length: lanes }, worker));
+  if (tokens.calls) log(`ใช้ AI ${fmt(tokens.calls)} ครั้ง${tokens.tokens ? ` · ${fmt(tokens.tokens)} token` : ""}`);
   run.finished = true;
   run.step = "";
   // Terms found later in the run may occur in chapters translated earlier: check every chapter again.
-  const flagged = p.chapters.filter((c) => c.translation && recheckChapter(p, c)?.ok === false);
+  const flagged = p.chapters.filter((c) => c.translation && (recheckChapter(p, c)?.ok === false || c.review?.unresolved?.length));
   save(true);
   render();
   if (flagged.length && !stopped && ai().paid) {
-    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน · กำลังแก้ ${flagged.length} ตอนที่มีชื่อไม่ตรง`);
+    toast(`แปลเสร็จ ${run.done}/${run.total} ตอน · กำลังแก้ ${flagged.length} ตอนที่มีจุดต้องเช็ก`);
     const firstId = run.firstId;
     await fixQueue(flagged);
     if (state.run) state.run.firstId = firstId;
     renderRunner();
     return;
   }
-  if (flagged.length) log(`มี ${flagged.length} ตอนที่มีชื่อไม่ตรง · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
+  if (flagged.length) log(`มี ${flagged.length} ตอนที่มีจุดต้องเช็ก · กด “แก้ทุกตอนที่มีจุดต้องเช็ก” ที่แท็บตอน`);
   toast(`แปลเสร็จ ${run.done}/${run.total} ตอน${run.added ? ` · คำใหม่ ${run.added} คำ` : ""}`);
 }
 
 // Fix every translated chapter whose check found problems (same as "ให้ AI แก้" on each).
 async function fixQueue(chapters) {
-  if (busy() || !aiReady()) return aiReady() ? toast("กำลังทำงานอยู่") : go("ai");
   const p = state.project;
+  if (busy() || !aiReady()) return aiReady() ? toast("กำลังทำงานอยู่") : go("ai");
   const exhausted = exhaustedSet();
-  const run = (state.run = { abort: new AbortController(), total: chapters.length, done: 0, current: "", step: "แก้คำที่เพี้ยน", log: [] });
+  const run = (state.run = { action: "fix", abort: new AbortController(), total: chapters.length, done: 0, current: "", step: "แก้คำที่เพี้ยน", log: [] });
   const call = createCaller(aiConfig(), {
     exhausted,
     onWait: (ms, why) => (run.log.push(`รอ ${Math.ceil(ms / 1000)} วินาที · ${why.slice(0, 80)}`), renderRunner()),
@@ -444,7 +516,8 @@ async function fixQueue(chapters) {
     try {
       const r = await fixChapter(p, c, { call, signal: run.abort.signal, onProgress: (e) => ((run.step = stepText(e)), renderRunner()) });
       run.done++;
-      run.log.push(`${r.ok ? "✓" : "เหลือ " + (r.missing.length + r.leftovers.length) + " จุด"} ${c.titleT || c.title}`);
+      const n = issueCount(r, c.review);
+      run.log.push(`${n ? "เหลือ " + n + " จุด" : "✓"} ${c.titleT || c.title}`);
     } catch (e) {
       run.log.push(`✗ ${c.title}: ${e.message}`);
       if (e.name === "AbortError" || e.kind === "auth" || e.kind === "quota") break;
@@ -452,12 +525,14 @@ async function fixQueue(chapters) {
     save(true);
   }
   run.finished = true;
+  const remaining = chapters.filter((c) => issueCount(c.issues, c.review)).length;
+  run.log.push(remaining ? `ตรวจเสร็จ · ยังเหลือ ${remaining} ตอนที่มีจุดต้องเช็ก` : `ตรวจผ่านครบ ${run.done} ตอน`);
   render();
 }
 
 function stepText(e) {
   const part = e.total > 1 ? ` ท่อน ${e.chunk + 1}/${e.total}` : "";
-  return { analyze: "หาชื่อและคำเฉพาะใหม่", translate: `แปล${part}`, polish: `ขัดเกลา${part}`, fix: `แก้คำที่เพี้ยน${part}`, done: "เสร็จ" }[e.step] || e.step;
+  return { analyze: "หาชื่อและคำเฉพาะใหม่", translate: `แปล${part}`, review: `AI อีกตัวตรวจเทียบต้นฉบับ${part}`, correct: `แก้ย่อหน้าที่ตรวจพบ${part}`, repair: `แปลย่อหน้าที่ไม่ครบใหม่${part}`, polish: `ขัดเกลา${part}`, fix: `แก้คำที่เพี้ยน${part}`, done: "เสร็จ" }[e.step] || e.step;
 }
 
 function renderRunner() {
@@ -470,7 +545,8 @@ function renderRunner() {
   box.hidden = false;
   const pct = Math.round((run.done / run.total) * 100);
   const readBtn = run.firstId && state.view !== "book" ? `<button class="btn sm primary" data-action="read-book" data-id="${run.firstId}">${run.finished ? "อ่านเลย" : "อ่านตอนที่เสร็จแล้ว"}</button>` : "";
-  box.innerHTML = `<div class="row"><b class="grow">${run.finished ? `แปลเสร็จ ${run.done}/${run.total} ตอน` : `เสร็จ ${run.done}/${run.total} ตอน · กำลังแปล: ${esc(run.current)}`}</b>
+  const verb = run.action === "fix" ? "ตรวจ/แก้" : "แปล";
+  box.innerHTML = `<div class="row"><b class="grow">${run.finished ? `${verb}เสร็จ ${run.done}/${run.total} ตอน` : `เสร็จ ${run.done}/${run.total} ตอน · ${run.action === "fix" ? "กำลังตรวจ/แก้" : "กำลังแปล"}: ${esc(run.current)}`}</b>
     ${readBtn}${run.finished ? `<button class="btn sm" data-action="close-runner">ปิด</button>` : `<button class="btn sm" data-action="stop">หยุด</button>`}</div>
     <div class="bar"><i style="width:${pct}%"></i></div>
     <div class="small">${esc(run.step)}</div>
@@ -514,10 +590,11 @@ function viewRead() {
   const issues = c.issues;
   const issueBox = !c.translation
     ? ""
-    : issues && !issues.ok
-      ? `<div class="issues"><b>ตรวจพบ ${issues.missing.length + issues.leftovers.length} จุด</b>
+    : issueCount(issues, c.review)
+      ? `<div class="issues"><b>ตรวจพบ ${issueCount(issues, c.review)} จุด</b>
         ${issues.missing.length ? `<div class="small">คำที่ไม่ได้แปลตามอภิธานศัพท์: ${issues.missing.map((m) => `<mark class="miss">${esc(m.entry.source)}</mark> → ต้องเป็น “${esc(m.entry.target)}”`).join(" · ")}</div>` : ""}
         ${issues.leftovers.length ? `<div class="small">ข้อความที่ยังไม่ได้แปล: ${issues.leftovers.map(esc).join(" · ")}</div>` : ""}
+        ${issueLines(c).filter((l) => !/^(ชื่อไม่ตรง|ยังไม่ได้แปล):/.test(l)).map((l) => `<div class="small">${esc(l)}</div>`).join("")}
         <div class="row" style="margin-top:6px"><button class="btn sm primary" data-action="fix-chapter" ${busy() ? "disabled" : ""}>ให้ AI แก้</button><button class="btn sm" data-action="recheck">ตรวจใหม่</button></div></div>`
       : `<div class="issues ok small">✓ ชื่อและคำเฉพาะ ${used.length} คำในตอนนี้ แปลตรงตามอภิธานศัพท์ทั้งหมด <button class="btn sm ghost" data-action="recheck">ตรวจใหม่</button></div>`;
   return `
@@ -548,6 +625,14 @@ function viewRead() {
 }
 
 // Full-page reading: translation only, no highlights or source.
+// Automatic checks only point at likely mistakes; passing them is not proof the translation is right.
+function checkNote(c) {
+  const lines = issueLines(c);
+  const by = c.review && !c.review.error ? ` และ AI อีกตัว (${esc(c.review.model || "-")})` : "";
+  if (!lines.length) return `<p class="small muted">ตรวจอัตโนมัติด้วยโปรแกรม${by}: ไม่พบจุดผิดที่ตรวจได้ · ยังไม่ใช่การตรวจโดยคน</p>`;
+  return `<details class="issues small"><summary>ตรวจอัตโนมัติพบ ${lines.length} จุดที่ควรเช็กเทียบต้นฉบับ</summary>${lines.map((l) => `<div>${esc(l)}</div>`).join("")}<div class="muted">ตรวจด้วยโปรแกรม${by} ยังไม่ใช่การตรวจโดยคน</div></details>`;
+}
+
 function viewBook() {
   const p = state.project;
   if (!p.chapters.length) return `<div class="card"><p>ยังไม่มีตอน</p><button class="btn primary" data-action="view" data-view="chapters">เพิ่มตอน</button></div>`;
@@ -565,6 +650,7 @@ function viewBook() {
     <p class="book-kicker">${esc(p.name)} · ตอนที่ ${i + 1}</p>
     <h1>${esc(c.titleT || c.title)}</h1>
     ${c.translation ? highlight(c.translation, [], "target") : `<p class="muted">ตอนนี้ยังไม่ได้แปล</p><button class="btn primary" data-action="translate-one" data-id="${c.id}" ${busy() ? "disabled" : ""}>แปลตอนนี้</button>`}
+    ${c.translation ? checkNote(c) : ""}
     ${nav("bottom")}
   </article>`;
 }
@@ -744,6 +830,7 @@ function viewSettings() {
   <div class="card">
     <h2>วิธีแปล</h2>
     <label class="check"><input type="checkbox" name="autoFix" ${p.autoFix ? "checked" : ""}><span><b>ตรวจและแก้ชื่อที่เพี้ยนอัตโนมัติ</b><br><span class="small muted">ถ้าเจอชื่อที่แปลไม่ตรงกับที่ระบบจำไว้ ให้ AI แก้เฉพาะจุดนั้น</span></span></label>
+    <label class="check"><input type="checkbox" name="review" ${p.review ? "checked" : ""}><span><b>ให้ AI อีกตัวตรวจเทียบต้นฉบับ</b><br><span class="small muted">หาประโยคที่แปลผิดความหมาย ตกหล่น เติมเอง หรือสลับคนพูด แล้วแก้เฉพาะย่อหน้านั้น ใช้โควตาเพิ่มอย่างน้อย 1 ครั้งต่อท่อน</span></span></label>
     <label class="check"><input type="checkbox" name="polish" ${p.polish ? "checked" : ""}><span><b>ขัดเกลาอีกรอบ</b><br><span class="small muted">ให้ AI อ่านเทียบต้นฉบับแล้วเกลาสำนวน สวยขึ้นแต่ใช้โควตาเป็น 2 เท่า</span></span></label>
     <div class="grid2" style="margin-top:10px">
       <label class="field"><span>ชื่อตัวละคร สถานที่ ที่เจอใหม่</span><select name="autoTerms">
@@ -773,6 +860,7 @@ afterRender.settings = () => {
       nameStyle: srcChanged ? "" : d.get("nameStyle") || "",
       autoFix: d.has("autoFix"),
       polish: d.has("polish"),
+      review: d.has("review"),
       autoTerms: d.get("autoTerms"),
       chunkSize: Number(d.get("chunkSize")) === chunkSizeFor(p.srcLang) ? 0 : Number(d.get("chunkSize")),
       custom: d.get("custom").trim(),
@@ -822,7 +910,7 @@ function viewAI() {
 
 afterRender.ai = () => {
   main.querySelectorAll('input[name="provider"]').forEach((r) =>
-    r.addEventListener("change", () => {
+    r.addEventListener("change", async () => {
       const a = ai();
       saveAI({ provider: r.value, model: a.models[`last:${r.value}`] || PROVIDERS[r.value].defaultModel });
       render();
@@ -834,17 +922,17 @@ afterRender.ai = () => {
     renderPill();
   });
   $("#aiBase")?.addEventListener("change", (e) => saveAI({ base: e.target.value.trim() }));
-  $("#aiModel").addEventListener("change", (e) => {
+  $("#aiModel")?.addEventListener("change", (e) => {
     const a = ai();
     saveAI({ model: e.target.value.trim(), models: { ...a.models, [`last:${a.provider}`]: e.target.value.trim() } });
     renderPill();
   });
-  $("#aiFallback").addEventListener("change", (e) => {
+  $("#aiFallback")?.addEventListener("change", (e) => {
     saveAI({ fallback: e.target.checked });
     render();
   });
-  $("#aiParallel").addEventListener("change", (e) => saveAI({ parallel: Number(e.target.value) }));
-  $("#aiPaid").addEventListener("change", (e) => saveAI({ paid: e.target.checked }));
+  $("#aiParallel")?.addEventListener("change", (e) => saveAI({ parallel: Number(e.target.value) }));
+  $("#aiPaid")?.addEventListener("change", (e) => saveAI({ paid: e.target.checked }));
 };
 
 async function testAI() {
@@ -976,7 +1064,7 @@ const actions = {
     render();
   },
   "translate-selected": () => runQueue(state.project.chapters.filter((c) => state.selected.has(c.id)).map((c) => c.id)),
-  "fix-all": () => fixQueue(state.project.chapters.filter((c) => c.translation && c.issues && !c.issues.ok)),
+  "fix-all": () => fixQueue(state.project.chapters.filter((c) => c.translation && issueCount(c.issues, c.review))),
   "translate-todo": () => runQueue(state.project.chapters.filter((c) => !c.translation).map((c) => c.id)),
   "translate-one": (el) => {
     const c = state.project.chapters.find((x) => x.id === el.dataset.id);
@@ -1017,7 +1105,7 @@ const actions = {
   "fix-chapter": async () => {
     if (busy() || !aiReady()) return;
     const c = currentChapter();
-    const run = (state.run = { abort: new AbortController(), total: 1, done: 0, current: c.titleT || c.title, step: "แก้คำที่เพี้ยน", log: [] });
+    const run = (state.run = { action: "fix", abort: new AbortController(), total: 1, done: 0, current: c.titleT || c.title, step: "แก้คำที่เพี้ยน", log: [] });
     renderRunner();
     try {
       const exhausted = exhaustedSet();

@@ -100,9 +100,9 @@ export const NAME_STYLES = {
   ],
 };
 
-// Default chunk size in source characters: dense scripts carry more meaning per character.
-// Large chunks keep the number of requests low, which matters on free daily quotas.
-export const chunkSizeFor = (code) => (langByCode(code).cjk ? 3000 : 8000);
+// Larger CJK chunks reduce API calls and the per-call delays imposed by free-tier limits.
+// If a model cannot return a full chunk, the pipeline halves it and retries.
+export const chunkSizeFor = (code) => (langByCode(code).cjk ? 5000 : 8000);
 
 // Source-language pitfalls the translator prompt warns about (written for a Thai target, still useful otherwise).
 export const LANG_NOTES = {

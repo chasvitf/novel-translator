@@ -1,10 +1,10 @@
 // Real-API test of a whole book: one file → splitChapters → several chapters translated at once with a
 // shared glossary, like the app's "แปลพร้อมกัน" with the paid-key option (300 ms spacing).
-// Usage: node scripts/run_parallel.mjs [lanes] [files...]   (GEMINI_API_KEY from .env)
+// Usage: node scripts/run_parallel.mjs [lanes] [files...]   (GEMINI_API_KEY from .env; REVIEW=1 adds the independent check)
 import fs from "node:fs";
 import path from "node:path";
 import { createCaller, PROVIDERS } from "../public/js/lib/providers.js";
-import { translateChapter, newChapter, recheckChapter, fixChapter } from "../public/js/lib/pipeline.js";
+import { runChapters, newChapter, recheckChapter, fixChapter } from "../public/js/lib/pipeline.js";
 import { splitChapters } from "../public/js/lib/split.js";
 import { checkTranslation } from "../public/js/lib/glossary.js";
 
@@ -20,7 +20,7 @@ const list = files.length ? files : ["zh-xiyouji-01.txt", "zh-xiyouji-02.txt", "
 const ZH = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
 const book = list.map((f, i) => `第${ZH[i] || i + 1}回\n\n${fs.readFileSync(path.join(root, "corpus", f), "utf8")}`).join("\n\n");
 
-const project = { name: "parallel", srcLang: "zh", tgtLang: "th", genre: "xianxia", nameStyle: "hokkien", custom: "", polish: false, autoFix: true, autoTerms: "auto", glossary: [], chapters: [] };
+const project = { name: "parallel", srcLang: "zh", tgtLang: "th", genre: "xianxia", nameStyle: "hokkien", custom: "", polish: false, autoFix: true, autoTerms: "auto", review: process.env.REVIEW === "1", glossary: [], chapters: [] };
 project.chapters = splitChapters(book).map((c) => newChapter(c.title, c.text));
 console.log(`split into ${project.chapters.length} chapters: ${project.chapters.map((c) => c.title.slice(0, 12)).join(" | ")}`);
 
@@ -36,27 +36,21 @@ const base = createCaller({ provider: "gemini", model: "gemini-3.5-flash", key: 
 });
 const call = async (req) => {
   calls++; inflight++; peak = Math.max(peak, inflight);
-  try { const r = await base(req); used[r.model] = (used[r.model] || 0) + 1; return r; } finally { inflight--; }
+  const t = Date.now();
+  try { const r = await base(req); used[r.model] = (used[r.model] || 0) + 1; console.log(`   · ${r.model} ${req.json ? "json" : "text"} ${Math.round((Date.now() - t) / 1000)}s`); return r; } finally { inflight--; }
 };
 
+// The reviewer prefers the second model of the list, like the app does.
+const [first, second, ...rest] = PROVIDERS.gemini.models;
+const reviewCall = createCaller({ provider: "gemini", model: second, key: process.env.GEMINI_API_KEY, fallbackModels: [second, first, ...rest], minIntervalMs: 300 }, { exhausted });
 const t0 = Date.now();
-const order = [];
-let next = 0;
-async function worker() {
-  while (next < project.chapters.length) {
-    const ch = project.chapters[next++];
-    const t = Date.now();
-    try {
-      await translateChapter(project, ch, { call, onProgress: (p) => p.step === "terms" && p.added.length && console.log(`   + ${ch.title.slice(0, 10)}: ${p.added.length} terms`) });
-      order.push(ch.title);
-      console.log(`✓ ${ch.title.slice(0, 20)} in ${Math.round((Date.now() - t) / 1000)}s`);
-    } catch (e) {
-      console.log(`✗ ${ch.title.slice(0, 20)}: ${e.kind || ""} ${e.message}`);
-      if (e.kind === "quota" || e.kind === "auth") next = project.chapters.length;
-    }
-  }
-}
-await Promise.all(Array.from({ length: lanes }, worker));
+await runChapters(project, project.chapters, {
+  call,
+  reviewCall: async (req) => { calls++; const t = Date.now(); const r = await reviewCall(req); used[`review:${r.model}`] = (used[`review:${r.model}`] || 0) + 1; console.log(`   · review ${r.model} ${Math.round((Date.now() - t) / 1000)}s`); return r; },
+  lanes,
+  onProgress: (ch, p) => p.step === "terms" && p.added.length && console.log(`   + ${ch.title.slice(0, 10)}: ${p.added.length} terms`),
+  onChapter: (ch, e) => console.log(e ? `✗ ${ch.title.slice(0, 20)}: ${e.kind || ""} ${e.message}` : `✓ ${ch.title.slice(0, 20)} in ${Math.round(ch.stats.ms / 1000)}s, ${ch.stats.calls} calls`),
+});
 
 // Same as the app after a run with the paid-key option: names learned in later chapters may be
 // missing from earlier ones, so every flagged chapter gets a fix pass.
@@ -83,6 +77,7 @@ const outDir = path.join(root, "corpus", "out", "parallel");
 fs.mkdirSync(outDir, { recursive: true });
 for (const c of project.chapters) if (c.translation) fs.writeFileSync(path.join(outDir, `${String(project.chapters.indexOf(c) + 1).padStart(2, "0")}.th.txt`), `${c.titleT || c.title}\n\n${c.translation}\n`);
 fs.writeFileSync(path.join(outDir, "glossary.json"), JSON.stringify(project.glossary, null, 1));
-const summary = { before, lanes, seconds: Math.round((Date.now() - t0) / 1000), calls, peakConcurrent: peak, rateWaits, used, glossary: project.glossary.length, translated: rows.filter((r) => r.translated).length, of: rows.length, rows };
+const review = project.chapters.map((c) => c.review && { chapter: c.title.slice(0, 20), model: c.review.model, error: c.review.error, found: c.review.found, fixed: c.review.fixed.map((f) => ({ paragraph: f.paragraph, before: f.before, after: f.after })), unresolved: c.review.unresolved }).filter(Boolean);
+const summary = { review, stats: project.chapters.map((c) => c.stats), lanes, seconds: Math.round((Date.now() - t0) / 1000), calls, peakConcurrent: peak, rateWaits, used, glossary: project.glossary.length, translated: rows.filter((r) => r.translated).length, of: rows.length, rows };
 fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(summary, null, 1));
 console.log(JSON.stringify(summary, null, 1));

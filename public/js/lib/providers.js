@@ -26,12 +26,12 @@ export const PROVIDERS = {
   },
   groq: {
     name: "Groq",
-    badge: "ฟรี · ต้องมี key · เร็ว",
+    badge: "ต้องมี key · คิดค่าบริการตาม token",
     keyUrl: "https://console.groq.com/keys",
-    keyHelp: "เข้า console.groq.com/keys → Create API Key (ฟรี)",
+    keyHelp: "เข้า console.groq.com/keys → Create API Key · ตรวจสอบราคาโมเดลก่อนใช้งาน",
     base: "https://api.groq.com/openai/v1",
-    defaultModel: "llama-3.3-70b-versatile",
-    models: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3-32b"],
+    defaultModel: "openai/gpt-oss-120b",
+    models: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
     minIntervalMs: 2500,
   },
   openrouter: {
@@ -120,7 +120,7 @@ function httpError(res, data, text) {
   if (res.status === 429 || data?.error?.code === "FREE_LIMIT" || (res.status === 402 && /limit/i.test(msg))) {
     const quotaIds = (data?.error?.details || []).flatMap((d) => (d.violations || []).map((v) => v.quotaId || "")).join(" ");
     const daily = /per ?day|daily|PerDay/i.test(`${msg} ${quotaIds}`) || wait > 15 * 60 * 1000;
-    return daily ? new AIError("quota", `โควตาฟรีของวันนี้หมดแล้ว (${msg.slice(0, 120)})`) : new AIError("rate", `ถูกจำกัดความถี่: ${msg.slice(0, 160)}`, wait || 20000);
+    return daily ? new AIError("quota", `โควตาฟรีของวันนี้หมดแล้ว (${msg.slice(0, 120)})`) : new AIError("rate", `ถูกจำกัดความถี่: ${msg.slice(0, 160)}`, wait);
   }
   if (res.status === 401 || res.status === 403 || /api key not valid|invalid api key|unauthorized/i.test(msg)) return new AIError("auth", `key ใช้ไม่ได้: ${msg.slice(0, 160)}`);
   if (res.status >= 500) return new AIError("network", `เซิร์ฟเวอร์ของผู้ให้บริการขัดข้อง (${res.status})`, 5000);
@@ -136,7 +136,12 @@ async function gemini(cfg, { system, user, json, signal }) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: "user", parts: [{ text: user }] }],
-    generationConfig: { temperature: json ? 0.2 : 0.7, maxOutputTokens: 32768, ...(json ? { responseMimeType: "application/json" } : {}) },
+    generationConfig: {
+      temperature: json ? 0.2 : 0.7,
+      maxOutputTokens: 32768,
+      ...(cfg.model === "gemini-3.5-flash" ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
+      ...(json ? { responseMimeType: "application/json" } : {}),
+    },
     safetySettings: SAFETY,
   };
   const d = await post(`${GEMINI}/models/${encodeURIComponent(cfg.model)}:generateContent`, { "x-goog-api-key": cfg.key }, body, signal);
@@ -224,7 +229,7 @@ async function anthropicClient(cfg) {
 }
 
 function anthropicError(Anthropic, e) {
-  if (e instanceof Anthropic.RateLimitError) return new AIError("rate", `ถูกจำกัดความถี่: ${e.message}`, Number(e.headers?.get?.("retry-after")) * 1000 || 20000);
+  if (e instanceof Anthropic.RateLimitError) return new AIError("rate", `ถูกจำกัดความถี่: ${e.message}`, Number(e.headers?.get?.("retry-after")) * 1000 || 0);
   if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return new AIError("auth", `key ใช้ไม่ได้: ${e.message}`);
   if (e instanceof Anthropic.InternalServerError || e instanceof Anthropic.APIConnectionError) return new AIError("network", e.message, 5000);
   if (e instanceof Anthropic.APIError) return new AIError("bad", e.message);
@@ -287,39 +292,74 @@ export function listModels(cfg) {
 // model). `exhausted` is a Set of "provider/model" keys the app can persist for the day.
 const ALL_GONE = "โควตาฟรีของวันนี้หมดทุกโมเดลแล้ว ลองใหม่พรุ่งนี้ หรือเปลี่ยนผู้ให้บริการ/ใส่ key อื่น";
 
-export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), maxAttempts = 6 } = {}) {
+// A request with no reply after this long is treated as a network error and retried; without it one
+// hung connection stalls its worker for the rest of the run.
+const TIMEOUT_MS = 180_000;
+
+// The provider's answer, or a timeout as a retryable network error. Stopping the run stays an AbortError.
+async function completeWithTimeout(cfg, req) {
+  const ms = cfg.timeoutMs ?? TIMEOUT_MS;
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  req.signal?.addEventListener("abort", stop, { once: true });
+  const timer = setTimeout(stop, ms);
+  try {
+    return await complete(cfg, { ...req, signal: controller.signal });
+  } catch (e) {
+    if (controller.signal.aborted && !req.signal?.aborted) throw new AIError("network", `AI ไม่ตอบภายใน ${Math.round(ms / 1000)} วินาที`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    req.signal?.removeEventListener("abort", stop);
+  }
+}
+
+export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), maxAttempts = 6, retryBaseMs = 2000 } = {}) {
   const minGap = cfg.minIntervalMs ?? PROVIDERS[cfg.provider]?.minIntervalMs ?? 0;
   const chain = [cfg.model, ...(cfg.fallbackModels || [])].filter((m, i, a) => m && a.indexOf(m) === i);
   const keyOf = (m) => `${cfg.provider}/${m}`;
-  let last = 0;
+  let nextSlot = 0;
+
+  // Reserve start times synchronously so parallel workers honor the provider gap instead
+  // of waking together and accidentally sending a burst.
+  async function waitForSlot(signal) {
+    const now = Date.now();
+    const slot = Math.max(now, nextSlot);
+    nextSlot = slot + minGap;
+    const gap = slot - now;
+    if (gap > 0) {
+      if (gap > 3000) onWait?.(gap, "เว้นระยะตามโควตา");
+      await sleep(gap, signal);
+    }
+  }
 
   async function attempt(model, req) {
-    let overloaded = 0;
     for (let n = 1; ; n++) {
-      const gap = last + minGap - Date.now();
-      if (gap > 0) {
-        if (gap > 3000) onWait?.(gap, "เว้นระยะตามโควตาฟรี");
-        await sleep(gap, req.signal);
-      }
-      last = Date.now();
+      await waitForSlot(req.signal);
+      req.onStart?.(); // time limits on the answer start here, not while waiting for a turn
       try {
-        return await complete({ ...cfg, model }, req);
+        return await completeWithTimeout({ ...cfg, model }, req);
       } catch (e) {
         if (!(e instanceof AIError)) throw e;
-        if (e.kind === "network" && /\(503\)/.test(e.message) && ++overloaded >= 3 && chain.length > 1) {
+        // A 503 means this model is currently overloaded. Move to another configured model
+        // immediately instead of making the user wait through repeated retries.
+        if (e.kind === "network" && /\(503\)/.test(e.message) && chain.length > 1) {
           e.kind = "overloaded";
           throw e;
         }
         if (!(e.kind === "rate" || e.kind === "network") || n >= maxAttempts) throw e;
-        const wait = Math.max(e.retryAfterMs, 2000 * 2 ** (n - 1));
+        // Jitter keeps parallel workers that hit the same limit from retrying in lockstep.
+        // A rate limit without a stated wait gets 10× the base delay (20 seconds by default).
+        const floor = e.retryAfterMs || (e.kind === "rate" ? retryBaseMs * 10 : 0);
+        const wait = Math.max(floor, retryBaseMs * 2 ** (n - 1) * (0.75 + Math.random() * 0.5));
         onWait?.(wait, e.message);
         await sleep(wait, req.signal);
       }
     }
   }
 
-  // A model that kept answering "overloaded" is passed over for a while, so the next calls don't
-  // spend ~20 seconds retrying it first. When every model is cooling down, they are tried anyway.
+// A model that answers 503 is passed over for a while, so the next calls don't retry it first.
+// When every model is cooling down, they are tried anyway.
   const cooling = new Map();
   const OVERLOAD_COOLDOWN_MS = 3 * 60 * 1000;
 
@@ -345,5 +385,22 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
         if (next) onSwitch?.(model, next, e.message);
       }
     }
+  };
+}
+
+// Once `main` has run out of quota on every model, send this and every later call to `backup`.
+export function withBackup(main, backup, onSwitch) {
+  let switched = false;
+  return async function call(req) {
+    if (!switched) {
+      try {
+        return await main(req);
+      } catch (e) {
+        if (e.kind !== "quota") throw e;
+        switched = true;
+        onSwitch?.(e);
+      }
+    }
+    return backup(req);
   };
 }

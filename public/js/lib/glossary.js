@@ -100,11 +100,44 @@ function strayLatin(source, translated, entries, tgtLang) {
   const src = source.toLowerCase();
   const allowed = entries.map((e) => `${e.target} ${e.source}`.toLowerCase()).join(" ");
   const words = (translated.match(/[A-Za-z][A-Za-z'’-]{2,}/g) || []).map((w) => w.replace(/['’-]+$/, "")).filter((w) => w.length >= 3);
+  // Thai has no spaces inside words, so Latin letters touching Thai ones are a glitch ("h้อย"), however short.
+  if (tgtLang === "th") words.push(...(translated.match(/(?<=\p{Script=Thai}|[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])[A-Za-z]+|[A-Za-z]+(?=\p{Script=Thai}|[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])/gu) || []));
   return [...new Set(words.filter((w) => !src.includes(w.toLowerCase()) && !allowed.includes(w.toLowerCase()) && !/^(?:OK|AI|CEO|ID|DNA|GPS|TV|VIP)$/i.test(w)))];
 }
 
+// Paragraph-level checks for content that went missing, which name checks cannot see. The translator
+// is told to keep one paragraph per source paragraph, so paragraph i of the output answers paragraph i of
+// the source. Lengths are compared with this passage's own output/source ratio, never a fixed ratio
+// (Thai runs about twice as long as Chinese and shorter than English).
+const SRC_QUOTE = /["“”「」『』«»]/;
+const OUT_QUOTE = /["“”「」『』«»‘’]/;
+const paras = (s) => String(s).split(/\n\s*\n|\n/).map((p) => p.trim()).filter(Boolean);
+const brief = (s) => (s.length > 80 ? s.slice(0, 80) + "…" : s);
+
+export function checkStructure(source, translated) {
+  const src = paras(source);
+  const out = paras(translated);
+  // Fewer paragraphs can mean lost content. More is usually a long paragraph or a poem split up (measured
+  // on real Gemini output: 35 → 81), which loses nothing, so it is not flagged; alignment is then unknown.
+  if (out.length < src.length) return [{ kind: "paragraphs", src: `${src.length}`, out: `${out.length}` }];
+  if (out.length !== src.length) return [];
+  const ratio = out.join("").length / Math.max(1, src.join("").length);
+  const found = [];
+  src.forEach((s, i) => {
+    const r = out[i].length / s.length;
+    if (s.length >= 10 && r < ratio * 0.3) found.push({ kind: "short", para: i, src: brief(s), out: brief(out[i]) });
+    else if (SRC_QUOTE.test(s) && !OUT_QUOTE.test(out[i])) found.push({ kind: "dialogue", para: i, src: brief(s), out: brief(out[i]) });
+  });
+  return found;
+}
+
+// Problems a chapter is flagged for: glossary and script checks, structure checks, and what the
+// independent reviewer found and could not fix.
+export const issueCount = (issues, review) =>
+  (issues ? issues.missing.length + issues.leftovers.length + (issues.structure?.length || 0) : 0) + (review?.unresolved?.length || 0);
+
 // Compare a translation with its source: locked terms that did not come through,
-// and runs of foreign script left in the text.
+// runs of foreign script left in the text, and missing or broken paragraphs.
 export function checkTranslation(source, translated, entries, srcLang, tgtLang) {
   const used = relevantEntries(entries, source);
   const srcCounts = countInText(used, source);
@@ -116,7 +149,8 @@ export function checkTranslation(source, translated, entries, srcLang, tgtLang) 
     if (found === 0) missing.push({ entry: e, expected: srcCounts.get(e.id) || 1 });
   }
   const leftovers = srcLang === tgtLang ? [] : [...foreignRuns(translated, tgtLang), ...strayLatin(source, translated, entries, tgtLang)];
-  return { missing, leftovers, ok: missing.length === 0 && leftovers.length === 0 };
+  const structure = checkStructure(source, translated);
+  return { missing, leftovers, structure, ok: missing.length === 0 && leftovers.length === 0 && structure.length === 0 };
 }
 
 // Clean up a translation proposed by the AI: keep the first of "A / B" alternatives, and reject

@@ -135,7 +135,7 @@ test("a chunk cut off for length is split in half and retried", async () => {
   const call = async ({ user }) => {
     const passage = user.split("PASSAGE TO TRANSLATE:")[1];
     if (passage.length > 1200) throw Object.assign(new AIError("length", "too long"));
-    return { text: "แปลแล้ว" };
+    return { text: "แปลแล้ว" + "ก".repeat(Math.ceil(passage.length / 2)) }; // a real translation is not a few letters
   };
   await translateChapter(project, ch, { call });
   assert.equal(ch.translation.split("แปลแล้ว").length - 1, 2, "two halves of two paragraphs each");
