@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { translateChapter, newChapter, runChapters, resetStuck, acceptFix, recheckChapter, fixChapter } from "../public/js/lib/pipeline.js";
 import { createCaller, AIError } from "../public/js/lib/providers.js";
-import { checkTranslation, makeEntry, issueCount } from "../public/js/lib/glossary.js";
+import { checkTranslation, checkStructure, makeEntry, issueCount, mergeTerms } from "../public/js/lib/glossary.js";
 
 const project = (extra = {}) => ({ srcLang: "zh", tgtLang: "th", genre: "xianxia", nameStyle: "", custom: "", polish: false, autoFix: true, autoTerms: "off", glossary: [], chapters: [], ...extra });
 
@@ -500,4 +500,69 @@ test("fixing a chapter never leaves more problems than it started with", async (
   // The repair answers with the merged chunk split back into two paragraphs.
   await fixChapter(p, ch, { call: async ({ user }) => (passageOf(user).includes("丙") ? { text: "ค ยืนอยู่บนยอดเขา มองเมฆขาวที่อยู่ไกลออกไป และครุ่นคิดอยู่นานแสนนาน\n\n“ง ถามว่า สบายดีไหม”" } : splitCall({ user })) });
   assert.ok(issueCount(ch.issues) <= before, `before ${before}, after ${issueCount(ch.issues)}: ${JSON.stringify(ch.issues.structure)}`);
+});
+
+// From the user's novel: Chinese puts “ ” around names too, which Thai rightly drops.
+test("names and terms in quotation marks are not treated as dialogue", () => {
+  const src = "作为第三纪元文明的遗族，尼安德特人是三十年前的“三界融合之战”发起者。\n\n“真香”中队的17名飞行员没有人吭声。";
+  const out = "ในฐานะชนเผ่าตกค้างของอารยธรรมยุคที่สาม ชาวนีแอนเดอร์ทัลคือผู้ก่อสงครามหลอมรวมสามแดนเมื่อสามสิบปีก่อน\n\nนักบินทั้ง 17 นายของฝูงบินเจินเซียงไม่มีใครปริปาก";
+  assert.deepEqual(checkStructure(src, out), []);
+  // Real speech that lost its marks is still flagged.
+  assert.deepEqual(checkStructure("“小弟弟，来搞机吗？”她问。\n\n他走了。", "น้องชาย มาเล่นเครื่องไหม เธอถาม\n\nเขาเดินจากไป").map((x) => x.kind), ["dialogue"]);
+});
+
+// From the user's novel: inside one chunk the model split a paragraph and merged another, so the counts
+// matched but paragraph 64 of the translation was the speech of source paragraph 63.
+test("paragraphs shifted by one inside a chunk are not reported as short or broken dialogue", () => {
+  const src = [
+    "山田当然不是姓山名田，这只是大家给他起的外号，因为他总是喜欢在训练场上种花。",
+    "“小弟弟，来搞机吗？”",
+    "一个短发妹子冲着陈非舔了舔舌头，手上握着一支大哑铃，光洁细腻的巧克力色皮肤下面肌肉块垒分明。",
+    "陈非有点发懵，这个短发妹子到底想表达什么意思？",
+  ].join("\n\n");
+  const out = [
+    "ยามาดะ แน่นอนว่ามิได้มีแซ่ว่าซานชื่อว่าเถียน นี่เป็นเพียงฉายาที่ทุกคนตั้งให้ เพราะเขาชอบปลูกดอกไม้ที่สนามฝึกเสมอ",
+    "“น้องชาย มาเล่นเครื่องด้วยกันไหมจ๊ะ?”",
+    "สาวผมสั้นคนหนึ่งเลียริมฝีปากใส่เฉินเฟย มือถือดัมเบลอันใหญ่ ผิวสีช็อกโกแลตเนียนละเอียดเผยให้เห็นกล้ามเนื้อเป็นมัด เฉินเฟยรู้สึกงงงวยเล็กน้อย แม่นางผมสั้นผู้นี้สื่อความหมายอันใดกันแน่",
+  ];
+  // One paragraph split off at the start and the last two merged: same count, shifted by one in the middle.
+  const shifted = ["ยามาดะ แน่นอนว่ามิได้มีแซ่ว่าซานชื่อว่าเถียน", "นี่เป็นเพียงฉายาที่ทุกคนตั้งให้ เพราะเขาชอบปลูกดอกไม้ที่สนามฝึกเสมอ", out[1], out[2]].join("\n\n");
+  assert.deepEqual(checkStructure(src, shifted), []);
+});
+
+// From the user's novel: Vietnamese "đồng thời" inside the Thai was reported only as "i", so the patch
+// went looking for the first "i" in the chapter and the leak stayed.
+test("Latin words with accents (Vietnamese) leaking into Thai are reported as whole words", () => {
+  const r = checkTranslation("同时也是他的工作地点。", "สนามบินหมายเลข 2 ซึ่ง đồng thời ยังเป็นสถานที่ทำงานของเขา", [], "zh", "th");
+  assert.deepEqual(r.leftovers, ["đồng", "thời"]);
+});
+
+// From the user's novel: "Four-Hit-Combos！" kept as "Four-Hit-Combos!" was flagged as too short.
+test("a paragraph written in Latin letters may keep its length", () => {
+  // Thai here runs about 3.4 times the Chinese, as in the user's chapter; English kept as English does not.
+  const src = ["他大喊一聲衝了上去握劍。", "Four-Hit-Combos！", "敵人應聲倒地再也沒起來。", "眾人都看呆了不敢說話。"].join("\n\n");
+  const out = ["เขาตะโกนเสียงดังลั่นแล้วพุ่งตัวเข้าไปข้างหน้าอย่างรวดเร็ว สองมือกำด้ามกระบี่ยาวไว้แน่น", "Four-Hit-Combos!", "ศัตรูล้มลงไปกองกับพื้นทันทีที่สิ้นเสียง และไม่ได้ลุกขึ้นมาอีกเลยแม้แต่ครั้งเดียว", "ทุกคนที่อยู่ตรงนั้นต่างยืนตะลึงงันไปหมด ไม่มีใครกล้าเอ่ยปากพูดอะไรออกมาสักคำ"].join("\n\n");
+  assert.deepEqual(checkStructure(src, out), []);
+});
+
+// From the user's glossary: "A-39B“大嘴怪”轻型涡桨式攻击机" can almost never be matched word for word.
+test("proposed terms with quotation marks inside are not added to the glossary", () => {
+  const g = [];
+  mergeTerms(g, [{ source: "A-39B“大嘴怪”轻型涡桨式攻击机", target: "เครื่องบินโจมตี A-39B" }, { source: "大嘴怪", target: "บิ๊กเมาธ์" }], "locked", "th");
+  assert.deepEqual(g.map((e) => e.source), ["大嘴怪"]);
+});
+
+// From the user's novel: the stray "i" was in "เปี่ยมด้วยiมาดองอาจ", but the patch went to the first "i" in the
+// chapter (inside an earlier word), so the real glitch was never sent to the AI and the warning stayed.
+test("a stray letter is patched where it is glued to Thai, not at its first appearance", async () => {
+  const { patchLeftovers } = await import("../public/js/lib/pipeline.js");
+  const p = project();
+  // "Four-Hit-Combos" is in the source too, so its "i" is fine and comes first.
+  const out = `เขาตะโกน Four-Hit-Combos ออกไป ${"ข้อความปกติ ".repeat(30)}ชายหนุ่มผู้เปี่ยมด้วยiมาดองอาจชูนิ้วโป้ง`;
+  const sent = [];
+  const call = async ({ user }) => { const snip = /<<<\n([\s\S]*)\n>>>/.exec(user)[1]; sent.push(snip); return { text: snip.replace("ด้วยiมาด", "ด้วยมาด") }; };
+  const r = await patchLeftovers(p, "Four-Hit-Combos！", out, [], call);
+  assert.ok(sent[0].includes("ด้วยiมาด"), "the snippet holds the glued letter");
+  assert.ok(r.out.includes("เปี่ยมด้วยมาดองอาจ"));
+  assert.ok(r.issues.ok);
 });

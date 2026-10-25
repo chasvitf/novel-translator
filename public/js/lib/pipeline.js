@@ -2,7 +2,7 @@
 
 import { chunkText } from "./split.js";
 import { chunkSizeFor } from "./langs.js";
-import { relevantEntries, checkTranslation, mergeTerms, issueCount } from "./glossary.js";
+import { relevantEntries, checkTranslation, mergeTerms, issueCount, findLeak } from "./glossary.js";
 import * as P from "./prompts.js";
 
 const ANALYZE_LIMIT = 20000; // characters of the chapter sent to term extraction
@@ -318,7 +318,7 @@ const PATCH_SPAN = 60;
 export async function patchLeftovers(project, src, out, entries, call, signal) {
   let issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
   for (const bad of issues.leftovers.slice(0, 5)) {
-    const at = out.indexOf(bad);
+    const at = findLeak(out, bad);
     if (at < 0) continue;
     // Widen to whole words: back and forward to the nearest whitespace past PATCH_SPAN characters.
     let a = Math.max(0, at - PATCH_SPAN), b = Math.min(out.length, at + bad.length + PATCH_SPAN);

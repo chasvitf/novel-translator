@@ -95,22 +95,37 @@ function foreignRuns(text, tgtLang) {
 // Latin words in a Thai (or other non-Latin) translation that the source does not contain either:
 // models sometimes drop an English gloss into the text ("Coontail").
 const NON_LATIN_TARGETS = new Set(["th", "zh", "ja", "ko", "ru"]);
+const THAI_NEAR = "\\p{Script=Thai}";
+
+// Where a leftover sits: a letter glued to Thai is found there, not at its first appearance in the text
+// (a stray "i" in "ด้วยiมาด" once sent the fix to an "i" inside an earlier word).
+export function findLeak(text, bad) {
+  const e = escapeRe(bad);
+  const glued = new RegExp(`(?<=${THAI_NEAR})${e}|${e}(?=${THAI_NEAR})`, "u").exec(text);
+  return glued ? glued.index : text.indexOf(bad);
+}
 function strayLatin(source, translated, entries, tgtLang) {
   if (!NON_LATIN_TARGETS.has(tgtLang)) return [];
   const src = source.toLowerCase();
   const allowed = entries.map((e) => `${e.target} ${e.source}`.toLowerCase()).join(" ");
-  const words = (translated.match(/[A-Za-z][A-Za-z'’-]{2,}/g) || []).map((w) => w.replace(/['’-]+$/, "")).filter((w) => w.length >= 3);
+  // Any Latin letters, accented ones included: Vietnamese "đồng thời" once leaked into a Thai translation.
+  const words = (translated.match(/\p{Script=Latin}[\p{Script=Latin}\p{M}'’-]{2,}/gu) || []).map((w) => w.replace(/['’-]+$/, "")).filter((w) => w.length >= 3);
   // Thai has no spaces inside words, so Latin letters touching Thai ones are a glitch ("h้อย"), however short.
-  if (tgtLang === "th") words.push(...(translated.match(/(?<=\p{Script=Thai}|[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])[A-Za-z]+|[A-Za-z]+(?=\p{Script=Thai}|[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E])/gu) || []));
-  return [...new Set(words.filter((w) => !src.includes(w.toLowerCase()) && !allowed.includes(w.toLowerCase()) && !/^(?:OK|AI|CEO|ID|DNA|GPS|TV|VIP)$/i.test(w)))];
+  if (tgtLang === "th") words.push(...(translated.match(new RegExp(`(?<=${THAI_NEAR})[A-Za-z]+|[A-Za-z]+(?=${THAI_NEAR})`, "gu")) || []));
+  // Allowed only as a whole word of the source or glossary: a lone "i" is not allowed because "Hit" has one.
+  const hasWord = (text, w) => new RegExp(`(?<![\\p{Script=Latin}\\p{M}])${escapeRe(w.toLowerCase())}(?![\\p{Script=Latin}\\p{M}])`, "u").test(text);
+  return [...new Set(words.filter((w) => !hasWord(src, w) && !hasWord(allowed, w) && !/^(?:OK|AI|CEO|ID|DNA|GPS|TV|VIP)$/i.test(w)))];
 }
 
 // Paragraph-level checks for content that went missing, which name checks cannot see. The translator
 // is told to keep one paragraph per source paragraph, so paragraph i of the output answers paragraph i of
 // the source. Lengths are compared with this passage's own output/source ratio, never a fixed ratio
 // (Thai runs about twice as long as Chinese and shorter than English).
-const SRC_QUOTE = /["“”「」『』«»]/;
+// Speech: a quoted span with sentence punctuation inside (“你是誰？”), or an opening quote running on into the
+// next paragraph. Names and terms in quotes (“三界融合之战”, “真香”) have none, and Thai rightly drops those marks.
+const SPEECH = /[“「『"][^”」』"]*[，。！？…!?,.~～][^”」』"]*(?:[”」』"]|$)/;
 const OUT_QUOTE = /["“”「」『』«»‘’]/;
+const LATIN_ONLY = /^[\p{Script=Latin}\p{N}\p{P}\p{S}\s]+$/u;
 const paras = (s) => String(s).split(/\n\s*\n|\n/).map((p) => p.trim()).filter(Boolean);
 const brief = (s) => (s.length > 80 ? s.slice(0, 80) + "…" : s);
 
@@ -122,11 +137,24 @@ export function checkStructure(source, translated) {
   if (out.length < src.length) return [{ kind: "paragraphs", src: `${src.length}`, out: `${out.length}` }];
   if (out.length !== src.length) return [];
   const ratio = out.join("").length / Math.max(1, src.join("").length);
+  // Whether output paragraph o reads like the translation of source paragraph s.
+  const fits = (o, s) => {
+    if (!out[o] || !src[s]) return false;
+    const r = out[o].length / src[s].length / ratio;
+    return r > 0.5 && r < 2 && (!SPEECH.test(src[s]) || OUT_QUOTE.test(out[o]));
+  };
+  // A paragraph split in one place and two merged in another keep the count but shift the ones between
+  // (seen in a user's novel); a shifted pair is not a missing or broken paragraph, and no fix can change it.
+  const shifted = (i) => (fits(i, i - 1) && fits(i + 1, i)) || (fits(i, i + 1) && fits(i - 1, i));
   const found = [];
   src.forEach((s, i) => {
     const r = out[i].length / s.length;
-    if (s.length >= 10 && r < ratio * 0.3) found.push({ kind: "short", para: i, src: brief(s), out: brief(out[i]) });
-    else if (SRC_QUOTE.test(s) && !OUT_QUOTE.test(out[i])) found.push({ kind: "dialogue", para: i, src: brief(s), out: brief(out[i]) });
+    // English or numbers kept as they are ("Four-Hit-Combos！") do not grow like the rest of the text.
+    const short = s.length >= 10 && r < ratio * 0.3 && !LATIN_ONLY.test(s);
+    const lostQuotes = SPEECH.test(s) && !OUT_QUOTE.test(out[i]);
+    if ((short || lostQuotes) && shifted(i)) return;
+    if (short) found.push({ kind: "short", para: i, src: brief(s), out: brief(out[i]) });
+    else if (lostQuotes) found.push({ kind: "dialogue", para: i, src: brief(s), out: brief(out[i]) });
   });
   return found;
 }
@@ -171,6 +199,7 @@ export function mergeTerms(glossary, proposed, status, tgtLang = "th") {
     const e = makeEntry({ ...p, target: cleanProposedTarget(p?.target, tgtLang), status });
     if (!e.source || !e.target || known.has(e.source)) continue;
     if (/[、,，;；]/.test(e.source)) continue; // several names in one entry ("龐、劉、苟…") can never be checked
+    if (/[“”「」『』"《》]/.test(e.source)) continue; // a description around a quoted nickname ("A-39B“大嘴怪”轻型…攻击机") is never matched word for word
     if (e.source.length > 40 || e.target.length > 60) continue;
     known.add(e.source);
     glossary.push(e);
