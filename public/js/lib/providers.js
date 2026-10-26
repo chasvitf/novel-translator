@@ -299,11 +299,18 @@ async function completeWithTimeout(cfg, req) {
   }
 }
 
+// `cfg.keys` may hold several keys (free quota is per key, per model): each model is tried on every
+// key before moving down to the next model, calls rotate across keys, and the spacing between calls
+// shrinks with the number of keys.
 export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), maxAttempts = 6, retryBaseMs = 2000 } = {}) {
-  const minGap = cfg.minIntervalMs ?? PROVIDERS[cfg.provider]?.minIntervalMs ?? 0;
+  const keys = [...new Set((cfg.keys?.length ? cfg.keys : [cfg.key]).filter((k) => k != null))];
+  if (!keys.length) keys.push("");
+  const minGap = (cfg.minIntervalMs ?? PROVIDERS[cfg.provider]?.minIntervalMs ?? 0) / keys.length;
   const chain = [cfg.model, ...(cfg.fallbackModels || [])].filter((m, i, a) => m && a.indexOf(m) === i);
-  const keyOf = (m) => `${cfg.provider}/${m}`;
+  const tag = (k) => (keys.length > 1 ? `@key${keys.indexOf(k) + 1}…${k.slice(-4)}` : "");
+  const keyOf = (s) => `${cfg.provider}/${s.model}${tag(s.key)}`;
   let nextSlot = 0;
+  let turn = 0;
 
   // Reserve start times synchronously so parallel workers honor the provider gap instead
   // of waking together and accidentally sending a burst.
@@ -318,12 +325,13 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
     }
   }
 
-  async function attempt(model, req) {
+  // `rotate`: another key can take this request, so a rate limit hands it over instead of waiting.
+  async function attempt({ model, key }, req, rotate) {
     for (let n = 1; ; n++) {
       await waitForSlot(req.signal);
       req.onStart?.(); // time limits on the answer start here, not while waiting for a turn
       try {
-        return await completeWithTimeout({ ...cfg, model }, req);
+        return await completeWithTimeout({ ...cfg, model, key }, req);
       } catch (e) {
         if (!(e instanceof AIError)) throw e;
         // A 503 means this model is currently overloaded. Move to another configured model
@@ -332,6 +340,7 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
           e.kind = "overloaded";
           throw e;
         }
+        if (e.kind === "rate" && rotate) throw e;
         if (!(e.kind === "rate" || e.kind === "network") || n >= maxAttempts) throw e;
         // Jitter keeps parallel workers that hit the same limit from retrying in lockstep.
         // A rate limit without a stated wait gets 10× the base delay (20 seconds by default).
@@ -347,27 +356,41 @@ export function createCaller(cfg, { onWait, onSwitch, exhausted = new Set(), max
 // When every model is cooling down, they are tried anyway.
   const cooling = new Map();
   const OVERLOAD_COOLDOWN_MS = 3 * 60 * 1000;
+  const badKeys = new Set();
+  const label = (s) => `${s.model}${tag(s.key)}`;
 
   return async function call(req) {
+    // Every model on every key, best model first; the starting key rotates so calls spread out.
+    const start = turn++ % keys.length;
+    const order = keys.map((_, i) => keys[(start + i) % keys.length]);
+    const slots = chain.flatMap((model) => order.map((key) => ({ model, key })));
     const skip = new Set();
     let lastErr = null;
     for (;;) {
-      const usable = (m) => !exhausted.has(keyOf(m)) && !skip.has(m);
-      const model = chain.find((m) => usable(m) && !(cooling.get(m) > Date.now())) || chain.find(usable);
-      if (!model) throw lastErr && lastErr.kind !== "quota" ? lastErr : new AIError("quota", ALL_GONE);
+      const now = Date.now();
+      const usable = (s) => !badKeys.has(s.key) && !exhausted.has(keyOf(s)) && !skip.has(keyOf(s));
+      const fresh = (s) => usable(s) && !(cooling.get(s.model) > now) && !(cooling.get(s.key) > now);
+      const slot = slots.find(fresh) || slots.find(usable);
+      if (!slot) throw lastErr && lastErr.kind !== "quota" ? lastErr : new AIError("quota", ALL_GONE);
+      const rotate = slots.some((s) => s !== slot && s.model === slot.model && fresh(s));
       try {
-        return { ...(await attempt(model, req)), model };
+        return { ...(await attempt(slot, req, rotate)), model: slot.model };
       } catch (e) {
-        if (!(e instanceof AIError) || !["quota", "blocked", "overloaded"].includes(e.kind)) throw e;
-        if (e.kind === "quota") exhausted.add(keyOf(model));
+        const multi = keys.length > 1;
+        if (!(e instanceof AIError) || !(["quota", "blocked", "overloaded"].includes(e.kind) || (multi && ["auth", "rate"].includes(e.kind)))) throw e;
+        if (e.kind === "quota") exhausted.add(keyOf(slot));
+        if (e.kind === "auth") badKeys.add(slot.key);
+        if (e.kind === "rate") cooling.set(slot.key, now + (e.retryAfterMs || retryBaseMs * 10));
         if (e.kind === "overloaded") {
           e.kind = "network";
-          cooling.set(model, Date.now() + OVERLOAD_COOLDOWN_MS);
+          cooling.set(slot.model, now + OVERLOAD_COOLDOWN_MS);
         }
-        skip.add(model);
+        // A refusal or an overload belongs to the model, not the key.
+        if (e.kind === "blocked" || e.kind === "network") for (const k of keys) skip.add(keyOf({ model: slot.model, key: k }));
+        else if (e.kind !== "rate") skip.add(keyOf(slot)); // a rate-limited key cools down and comes back
         lastErr = e;
-        const next = chain.find((m) => !exhausted.has(keyOf(m)) && !skip.has(m));
-        if (next) onSwitch?.(model, next, e.message);
+        const next = slots.find(usable);
+        if (next) onSwitch?.(label(slot), label(next), e.message);
       }
     }
   };

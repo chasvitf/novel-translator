@@ -86,6 +86,7 @@ main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 20px 16
 .row.end { justify-content: flex-end; }
 .grow { flex: 1; min-width: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 label.field { display: block; }
 label.field > span { display: block; font-size: .85rem; color: var(--ink-2); margin-bottom: 4px; }

@@ -235,3 +235,29 @@ test("patchLeftovers fixes stray script from the words around it only", async ()
   const same = await patchLeftovers(project, "一元", out, [], async ({ user }) => ({ text: /<<<\n([\s\S]*)\n>>>/.exec(user)[1] }));
   assert.equal(same.out, out);
 });
+
+test("caller tries every key on the best model before moving down, and skips a bad key", async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => (globalThis.fetch = realFetch));
+  const asked = [];
+  const quota = () => new Response(JSON.stringify({ error: { code: 429, message: "quota", details: [{ violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }] }] } }), { status: 429 });
+  const ok = () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }] }), { status: 200 });
+  globalThis.fetch = async (url, init) => {
+    const model = String(url).match(/models\/([^:]+)/)[1];
+    const key = init.headers["x-goog-api-key"];
+    asked.push(`${model}:${key}`);
+    if (key === "bad1") return new Response(JSON.stringify({ error: { code: 400, message: "API key not valid" } }), { status: 400 });
+    if (key === "k2" && model === "a") return quota();
+    return ok();
+  };
+  const exhausted = new Set();
+  const call = createCaller({ provider: "gemini", keys: ["bad1", "k2", "k3"], model: "a", fallbackModels: ["a", "b"], minIntervalMs: 0 }, { exhausted });
+  const r = await call({ system: "s", user: "u" });
+  assert.equal(r.model, "a", "stays on the best model while another key has quota");
+  assert.deepEqual(asked, ["a:bad1", "a:k2", "a:k3"]);
+  assert.ok([...exhausted].some((k) => k.startsWith("gemini/a@key2")));
+  asked.length = 0;
+  await call({ system: "s", user: "u" });
+  await call({ system: "s", user: "u" });
+  assert.ok(asked.every((x) => x === "a:k3"), `bad and exhausted keys are skipped: ${asked}`);
+});

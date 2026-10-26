@@ -71,8 +71,13 @@ function aiConfig() {
   const p = PROVIDERS[a.provider];
   const fallbackModels = a.fallback ? (a.models[a.provider]?.length ? orderFallbacks(a.provider, a.models[a.provider]) : p.models) : [];
   // A paid key has no free-tier spacing to respect; keep a small gap so bursts don't trip rate limits.
-  return { provider: a.provider, model: a.model || p.defaultModel, key: a.keys[a.provider] || "", base: a.base, fallbackModels, ...(a.paid ? { minIntervalMs: 300 } : {}) };
+  const keys = keyList(a);
+  return { provider: a.provider, model: a.model || p.defaultModel, key: keys[0] || "", keys, base: a.base, fallbackModels, ...(a.paid ? { minIntervalMs: 300 } : {}) };
 }
+
+// Up to MAX_KEYS keys per provider, saved one per line; free quota is counted per key.
+const MAX_KEYS = 10;
+const keyList = (a = ai()) => [...new Set(String(a.keys[a.provider] || "").split(/\s+/).filter(Boolean))].slice(0, MAX_KEYS);
 
 // Prefer the curated order, then whatever else the account lists.
 function orderFallbacks(provider, listed) {
@@ -347,7 +352,7 @@ function viewChapters() {
       ${sel.length ? `<button class="btn" data-action="clear-select">ยกเลิกเลือก</button><button class="btn primary" data-action="translate-selected" ${busy() ? "disabled" : ""}>แปลที่เลือก ${sel.length} ตอน</button>` : ""}
       ${todo.length ? `<button class="btn ${sel.length ? "" : "primary"}" data-action="translate-todo" ${busy() ? "disabled" : ""}>แปลที่ยังไม่แปล (${todo.length})</button>` : ""}
     </div>
-    ${todo.length || sel.length ? `<p class="small muted">ประมาณ ${fmt(estimateCalls(p, sel.length ? sel : todo))} ครั้งที่เรียก AI${ai().provider === "gemini" ? " · Gemini ฟรีได้ราว 20 ครั้ง/วัน/โมเดล ระบบสลับโมเดลให้เองเมื่อโควตาหมด" : ""}</p>` : ""}
+    ${todo.length || sel.length ? `<p class="small muted">ประมาณ ${fmt(estimateCalls(p, sel.length ? sel : todo))} ครั้งที่เรียก AI${ai().provider === "gemini" ? ` · Gemini ฟรีได้ราว ${20 * Math.max(1, keyList().length)} ครั้ง/วัน/โมเดล (${Math.max(1, keyList().length)} key) ระบบสลับ key และโมเดลให้เองเมื่อโควตาหมด` : ""}</p>` : ""}
     ${!aiReady() ? `<div class="issues">ยังไม่ได้ตั้งค่า AI · <a href="#" data-action="view" data-view="ai">ตั้งค่าตอนนี้</a> (Gemini ฟรี ใช้เวลา 1 นาที)</div>` : ""}
     ${p.chapters.length ? `<div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-action="select-all" aria-label="เลือกทั้งหมด" ${sel.length === p.chapters.length ? "checked" : ""}></th><th class="hide-sm">#</th><th>ชื่อตอน</th><th class="hide-sm">ความยาว</th><th>สถานะ</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted">ยังไม่มีตอน</p>`}
   </div>`;
@@ -903,8 +908,9 @@ function viewAI() {
   <div class="card">
     <h2>${esc(p.name)}</h2>
     <p class="small muted">${esc(p.keyHelp)}${p.keyUrl ? ` · <a href="${p.keyUrl}" target="_blank" rel="noopener">เปิดหน้าขอ key ↗</a>` : ""}</p>
+    <div class="keys">${keySlots()}</div>
+    <p class="small muted" style="margin:6px 0 12px">ใส่ได้สูงสุด ${MAX_KEYS} key (แต่ละ key มีโควตาฟรีของตัวเอง) · ระบบใช้ key สลับกันไป และย้ายไป key ถัดไปเมื่อโควตาของ key ไหนหมด</p>
     <div class="grid2">
-      <label class="field"><span>API key${a.provider === "custom" ? " (ถ้ามี)" : ""}</span><input type="password" id="aiKey" value="${esc(a.keys[a.provider] || "")}" autocomplete="off" spellcheck="false" placeholder="วาง key ที่นี่"></label>
       ${a.provider === "custom" ? `<label class="field"><span>Base URL</span><input type="url" id="aiBase" value="${esc(a.base)}" placeholder="http://localhost:11434/v1"></label>` : ""}
       <label class="field"><span>โมเดล</span><div class="row" style="flex-wrap:nowrap"><input type="text" id="aiModel" list="modelList" value="${esc(a.model || p.defaultModel)}"><datalist id="modelList">${models.map((m) => `<option value="${esc(m)}">`).join("")}</datalist><button class="btn sm" data-action="load-models" type="button">ดึงรายชื่อ</button></div></label>
     </div>
@@ -920,8 +926,18 @@ function viewAI() {
     <p class="small muted" style="margin:8px 0 0">key ฟรี (Gemini ฟรี, Groq) ใช้ 1 ตอน · key เสียเงิน (OpenAI, Claude, Gemini แบบผูกบัตร) ติ๊กช่องนี้แล้วตั้ง 3–5 ตอน จะเร็วขึ้นหลายเท่า · ชื่อที่ระบบจำได้ใช้ร่วมกันทุกตอน ชื่อใหม่ที่เจอจะถูกจำและใช้กับตอนถัดไปทันที</p>
     ${exhaustedSet().size ? `<p class="small muted" style="margin:10px 0 0">โควตาฟรีวันนี้หมดแล้ว: ${esc([...exhaustedSet()].map((k) => k.split("/").slice(1).join("/")).join(", "))} · <a href="#" data-action="reset-quota">ล้าง (ถ้าโควตารีเซ็ตแล้ว)</a></p>` : ""}
   </div>
-  <div class="card small muted">key เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น และส่งตรงไปที่ ${esc(p.name)} · ถ้าใช้เครื่องคนอื่น กดล้าง key ก่อนออก <button class="btn sm" data-action="clear-key">ล้าง key</button></div>
+  <div class="card small muted">key เก็บในเบราว์เซอร์เครื่องนี้เท่านั้น และส่งตรงไปที่ ${esc(p.name)} · ถ้าใช้เครื่องคนอื่น กดล้าง key ก่อนออก <button class="btn sm" data-action="clear-key">ล้าง key ทั้งหมด</button></div>
   ${state.project ? `<div class="row end"><button class="btn" data-action="view" data-view="chapters">กลับไปที่ตอน ›</button></div>` : `<div class="row end"><button class="btn" data-action="home">กลับหน้าแรก ›</button></div>`}`;
+}
+
+// The saved keys plus one empty slot, up to MAX_KEYS.
+function keySlots() {
+  const a = ai();
+  const list = keyList(a);
+  const n = Math.min(MAX_KEYS, list.length + 1);
+  return Array.from({ length: n }, (_, i) =>
+    `<label class="field"><span>API key ${i + 1}${a.provider === "custom" ? " (ถ้ามี)" : ""}</span><input type="password" class="aiKey" value="${esc(list[i] || "")}" autocomplete="off" spellcheck="false" placeholder="${i ? "key เพิ่มเติม (ไม่ใส่ก็ได้)" : "วาง key ที่นี่"}"></label>`,
+  ).join("");
 }
 
 afterRender.ai = () => {
@@ -932,11 +948,15 @@ afterRender.ai = () => {
       render();
     }),
   );
-  $("#aiKey")?.addEventListener("change", (e) => {
-    const a = ai();
-    saveAI({ keys: { ...a.keys, [a.provider]: e.target.value.trim() } });
-    renderPill();
-  });
+  main.querySelectorAll(".aiKey").forEach((input) =>
+    input.addEventListener("change", () => {
+      const a = ai();
+      const list = [...main.querySelectorAll(".aiKey")].map((i) => i.value.trim()).filter(Boolean);
+      saveAI({ keys: { ...a.keys, [a.provider]: list.join("\n") } });
+      renderPill();
+      render();
+    }),
+  );
   $("#aiBase")?.addEventListener("change", (e) => saveAI({ base: e.target.value.trim() }));
   $("#aiModel")?.addEventListener("change", (e) => {
     const a = ai();
@@ -955,16 +975,24 @@ async function testAI() {
   const out = $("#aiTest");
   out.textContent = "กำลังทดสอบ…";
   out.style.color = "";
-  try {
-    const call = createCaller({ ...aiConfig(), fallbackModels: [] }, { maxAttempts: 1 });
-    const t0 = Date.now();
-    const r = await call({ system: "Translate the user's text into Thai. Output only the translation.", user: "林动握紧了拳头。" });
-    out.textContent = `✓ ใช้ได้ (${((Date.now() - t0) / 1000).toFixed(1)} วินาที): “${r.text.trim().slice(0, 60)}”`;
-    out.style.color = "var(--ok)";
-  } catch (e) {
-    out.textContent = `✗ ${e.message}`;
-    out.style.color = "var(--accent)";
+  const c = aiConfig();
+  const keys = c.keys.length ? c.keys : [""];
+  const lines = [];
+  let ok = 0;
+  for (const [i, key] of keys.entries()) {
+    const who = keys.length > 1 ? `key ${i + 1}: ` : "";
+    try {
+      const call = createCaller({ ...c, key, keys: [key], fallbackModels: [] }, { maxAttempts: 1 });
+      const t0 = Date.now();
+      const r = await call({ system: "Translate the user's text into Thai. Output only the translation.", user: "林动握紧了拳头。" });
+      lines.push(`✓ ${who}ใช้ได้ (${((Date.now() - t0) / 1000).toFixed(1)} วินาที): “${r.text.trim().slice(0, 60)}”`);
+      ok++;
+    } catch (e) {
+      lines.push(`✗ ${who}${e.message}`);
+    }
+    out.innerHTML = lines.map(esc).join("<br>") + (i < keys.length - 1 ? "<br>กำลังทดสอบ…" : "");
   }
+  out.style.color = ok === keys.length ? "var(--ok)" : ok ? "" : "var(--accent)";
 }
 
 async function loadModelList() {
