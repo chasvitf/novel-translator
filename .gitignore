@@ -6,3 +6,4 @@ corpus/vi-*
 .vercel
 .DS_Store
 .env*
+.claude/
