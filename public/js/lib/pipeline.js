@@ -4,10 +4,13 @@ import { chunkText } from "./split.js";
 import { chunkSizeFor } from "./langs.js";
 import { relevantEntries, checkTranslation, mergeTerms, issueCount, findLeak } from "./glossary.js";
 import * as P from "./prompts.js";
+import { relevantExamples } from "./learn.js";
 
 const ANALYZE_LIMIT = 20000; // characters of the chapter sent to term extraction
 const KNOWN_LIMIT = 200;
-const ANALYZE_TIMEOUT_MS = 30_000;
+// Thinking models (gemini-3.5-flash) often need over 30 s to list 40 terms of a long chapter, and a
+// timed-out analysis means the chapter is translated with none of its names locked.
+const ANALYZE_TIMEOUT_MS = 90_000;
 
 function analysisFingerprint(project, chapter) {
   const input = JSON.stringify([
@@ -76,7 +79,7 @@ async function analyzeChapterWithTimeout(project, chapter, call, signal) {
     return await analyzeChapter(project, chapter, call, controller.signal, start);
   } catch (e) {
     if (timedOut && !signal?.aborted) {
-      const timeoutError = new Error("AI หาคำใหม่ไม่ตอบภายใน 30 วินาที");
+      const timeoutError = new Error("AI หาคำใหม่ไม่ตอบภายใน 90 วินาที");
       timeoutError.kind = "analysis-timeout";
       throw timeoutError;
     }
@@ -110,9 +113,10 @@ export async function translateChunk(project, src, previous, summary, call, sign
 
 async function translateOne(project, src, previous, summary, call, signal, onStep, reviewCall) {
   const entries = relevantEntries(project.glossary, src);
+  const examples = relevantExamples(project, src);
   onStep?.("translate");
-  const first = await call({ system: P.translateSystem(project), user: P.translateUser({ chunk: src, entries, summary, previous }), signal });
-  let out = P.cleanReply(first.text);
+  const first = await call({ system: P.translateSystem(project), user: P.translateUser({ chunk: src, entries, summary, previous, examples }), signal });
+  let out = P.alignedReply(first.text, src, project.tgtLang);
   // A reply a fifth the length of its source is a refusal or a cut-off answer, not a translation (real
   // Pollinations answered a 7,000-character chapter with "ขออภัย ฉันไม่สามารถ…"). As "blocked" it gets
   // split in half and tried again, and if it never works the chapter ends as an error, not as done.
@@ -121,7 +125,7 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
   const draft = out;
   if (project.polish) {
     onStep?.("polish");
-    out = P.cleanReply((await call({ system: P.polishSystem(project), user: P.polishUser({ chunk: src, draft: out, entries }), signal })).text);
+    out = P.alignedReply((await call({ system: P.polishSystem(project), user: P.polishUser({ chunk: src, draft: out, entries, examples }), signal })).text, src, project.tgtLang);
   }
   let issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
   // Up to 3 fix rounds while each one still helps (a list of ten names can take more than one).
@@ -129,7 +133,7 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
     onStep?.("fix", issues);
     let fixed;
     try {
-      fixed = P.cleanReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: src, draft: out, entries, issues }), signal })).text);
+      fixed = P.alignedReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: src, draft: out, entries, issues }), signal })).text, src, project.tgtLang);
     } catch (e) {
       // A refused or failed fix keeps the translation we already have; the issues stay listed for the user.
       if (e.kind === "blocked" || e.kind === "bad" || e.kind === "length") break;
@@ -148,7 +152,7 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
 }
 
 const paras = (s) => String(s).split(/\n\s*\n|\n/).map((p) => p.trim()).filter(Boolean);
-const oneParagraph = (s) => P.cleanReply(s).replace(/\s*\n\s*/g, " ");
+const oneParagraph = (s) => P.stripMarks(P.cleanReply(s)).trim().replace(/\s*\n\s*/g, " ");
 const maxCorrections = (project) => project.maxCorrections ?? 3;
 
 // Share of the old text's character pairs still present in the new text.
@@ -177,7 +181,7 @@ async function repairStructure(project, src, out, entries, summary, previous, ca
   const translate = async (chunk, prev) => {
     onStep?.("repair", issues);
     try {
-      return (await call({ system: P.translateSystem(project), user: P.translateUser({ chunk, entries: relevantEntries(entries, chunk), summary, previous: prev }), signal })).text;
+      return (await call({ system: P.translateSystem(project), user: P.translateUser({ chunk, entries: relevantEntries(entries, chunk), summary, previous: prev, examples: relevantExamples(project, chunk) }), signal })).text;
     } catch (e) {
       if (e.kind === "blocked" || e.kind === "bad" || e.kind === "length") return null;
       throw e;
@@ -185,7 +189,7 @@ async function repairStructure(project, src, out, entries, summary, previous, ca
   };
   if (issues.structure.some((s) => s.kind === "paragraphs")) {
     const again = await translate(src, previous);
-    if (again != null) keep(P.cleanReply(again));
+    if (again != null) keep(P.alignedReply(again, src, project.tgtLang));
   }
   for (let n = 0; n < maxCorrections(project) && issues.structure.length; n++) {
     const s = issues.structure.find((x) => x.para != null);
@@ -399,6 +403,7 @@ export async function translateChapter(project, chapter, { call, reviewCall = ca
     if (project.review) chapter.review = mergeReviews(chunks.map((c) => c.review));
     else delete chapter.review;
     chapter.stats = { ...stats, ms: Date.now() - started };
+    delete chapter.learnedText; // a new AI version: corrections are counted against it from now on
     chapter.status = "done";
     chapter.translatedAt = Date.now();
     onProgress({ step: "done" });
@@ -451,7 +456,7 @@ export async function fixChapter(project, chapter, { call, signal, onProgress = 
         onProgress({ step: "fix", chunk: i, total: pieces.length, issues });
         let fixed;
         try {
-          fixed = P.cleanReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: c.src, draft: c.out, entries, issues }), signal })).text);
+          fixed = P.alignedReply((await call({ system: P.polishSystem(project), user: P.fixUser({ chunk: c.src, draft: c.out, entries, issues }), signal })).text, c.src, project.tgtLang);
         } catch (e) {
           if (e.kind === "blocked" || e.kind === "bad" || e.kind === "length") break;
           throw e;

@@ -3,6 +3,7 @@ import { splitChapters, chunkText } from "./lib/split.js";
 import { TERM_TYPES, typeName, makeEntry, parseCSV, toCSV, countInText, relevantEntries, issueCount } from "./lib/glossary.js";
 import { PROVIDERS, createCaller, listModels } from "./lib/providers.js";
 import { translateChapter, recheckChapter, fixChapter, newChapter, runChapters, resetStuck as resetStuckChapters } from "./lib/pipeline.js";
+import { memoryOf, collectCorrections, rememberExamples, learnFromCorrections } from "./lib/learn.js";
 import * as store from "./lib/store.js";
 import * as files from "./lib/files.js";
 
@@ -690,6 +691,8 @@ afterRender.read = () => {
     state.editing = false;
     render();
   });
+  alignPanes();
+  document.fonts?.ready.then(() => state.view === "read" && alignPanes());
   $("#editT")?.addEventListener("input", (e) => {
     const c = currentChapter();
     c.translation = e.target.value;
@@ -698,8 +701,75 @@ afterRender.read = () => {
   });
 };
 
+// Side by side, each translated paragraph starts level with its source paragraph (when both have the
+// same number of paragraphs), so a reader can follow line by line.
+function alignPanes() {
+  const panes = main.querySelectorAll(".reader .pane");
+  if (panes.length !== 2) return;
+  const [a, b] = [...panes].map((p) => [...p.querySelectorAll(":scope > h2, :scope > p")]);
+  [...a, ...b].forEach((el) => (el.style.minHeight = ""));
+  if (a.length !== b.length || panes[0].offsetTop !== panes[1].offsetTop) return; // stacked on a phone
+  a.forEach((el, i) => {
+    const h = Math.max(el.offsetHeight, b[i].offsetHeight);
+    el.style.minHeight = b[i].style.minHeight = `${h}px`;
+  });
+}
+window.addEventListener("resize", () => state.view === "read" && alignPanes());
+
 const busy = () => !!state.run && !state.run.finished;
 const currentChapter = () => state.project.chapters.find((c) => c.id === state.chapterId);
+
+// ---------------- learning from corrections ----------------
+
+// Paragraphs the person corrected become examples for later prompts right away; then one AI call turns them
+// into glossary changes (a renamed skill or person) and general rules.
+async function learnFromChapter(c, { quiet = false } = {}) {
+  const p = state.project;
+  if (!c?.edited || !c.translation) return;
+  const { corrections, aligned } = collectCorrections(c);
+  if (!aligned) {
+    if (!quiet) toast("จำสิ่งที่แก้ไม่ได้ เพราะจำนวนย่อหน้าไม่เท่าคำแปลของ AI (อย่ารวมหรือแยกย่อหน้า)");
+    return;
+  }
+  if (!corrections.length) return;
+  rememberExamples(p, corrections, c.id);
+  c.learnedText = c.translation;
+  save(true);
+  if (quiet || !aiReady()) return toast(`จำตัวอย่างที่คุณแก้แล้ว ${corrections.length} ย่อหน้า`);
+  toast(`AI กำลังเรียนรู้จาก ${corrections.length} ย่อหน้าที่คุณแก้…`);
+  try {
+    const call = createCaller(aiConfig(), { exhausted: exhaustedSet() });
+    const r = await learnFromCorrections(p, corrections, call);
+    if (state.project !== p) return;
+    save(true);
+    const parts = [];
+    if (r.renamed.length) parts.push(`เปลี่ยนคำแปล ${r.renamed.map((x) => `“${x.from}” → “${x.to}”`).join(", ")}`);
+    if (r.added.length) parts.push(`ล็อกคำใหม่ ${r.added.length} คำ`);
+    if (r.rules.length) parts.push(`กฎใหม่ ${r.rules.length} ข้อ`);
+    toast(parts.length ? `AI เรียนรู้แล้ว: ${parts.join(" · ")}` : `จำตัวอย่างที่คุณแก้แล้ว ${corrections.length} ย่อหน้า`);
+    for (const x of r.renamed) offerReplace(x.from, x.to);
+    if (r.added.length || r.renamed.length) p.chapters.forEach((ch) => recheckChapter(p, ch));
+    render();
+  } catch (e) {
+    toast(`จำตัวอย่างแล้ว แต่ AI สรุปกฎไม่สำเร็จ (${e.message})`);
+  }
+}
+
+function viewMemory() {
+  const mem = memoryOf(state.project);
+  return `
+  <div class="card">
+    <h2>สิ่งที่ AI เรียนรู้จากที่คุณแก้</h2>
+    <p class="small muted" style="margin:.3em 0 .8em">กด “แก้ไขเอง” ในหน้าอ่าน แก้คำแปลให้ถูก แล้วกด “เสร็จ” AI จะจำย่อหน้าที่แก้เป็นตัวอย่าง ล็อกชื่อหรือชื่อวิชาที่คุณเปลี่ยน และสรุปเป็นกฎใช้กับทุกตอนที่แปลหลังจากนี้ (แก้ได้ทีละคำ ไม่ต้องรวมหรือแยกย่อหน้า)</p>
+    ${
+      mem.rules.length
+        ? `<ol class="rules">${mem.rules.map((r) => `<li class="row" style="flex-wrap:nowrap;align-items:flex-start"><span class="grow">${esc(r.text)}</span><button type="button" class="btn sm ghost danger" data-action="del-rule" data-id="${r.id}" aria-label="ลบกฎ">ลบ</button></li>`).join("")}</ol>`
+        : `<p class="muted">ยังไม่มีกฎ</p>`
+    }
+    <div class="row" style="margin-top:8px"><span class="small muted grow">ตัวอย่างที่จำไว้ ${fmt(mem.examples.length)} ย่อหน้า (ส่งให้ AI ครั้งละไม่เกิน 3 ย่อหน้าที่คล้ายท่อนที่กำลังแปล)</span>
+      ${mem.examples.length ? `<button type="button" class="btn sm ghost danger" data-action="clear-examples">ล้างตัวอย่าง</button>` : ""}</div>
+  </div>`;
+}
 
 // ---------------- glossary ----------------
 
@@ -864,6 +934,7 @@ function viewSettings() {
     <label class="field" style="margin-top:10px"><span>คำสั่งเพิ่มเติมถึง AI (ไม่บังคับ)</span><textarea name="custom" placeholder="เช่น พระเอกแทนตัวเองว่า ข้า เรียกนางเอกว่า เจ้า · ไม่ต้องแปลชื่อเมนูอาหาร · ใช้ภาษาวัยรุ่นในบทพูดของน้องสาว">${esc(p.custom)}</textarea></label>
   </div>
   </form>
+  ${viewMemory()}
   <div class="card small muted">แก้แล้วบันทึกอัตโนมัติ · มีผลกับตอนที่แปลหลังจากนี้</div>`;
 }
 
@@ -1111,7 +1182,8 @@ const actions = {
   "translate-todo": () => runQueue(state.project.chapters.filter((c) => !c.translation).map((c) => c.id)),
   "translate-one": (el) => {
     const c = state.project.chapters.find((x) => x.id === el.dataset.id);
-    if (c.translation && c.edited && !confirm("ตอนนี้มีการแก้คำแปลเอง แปลใหม่จะทับของเดิม ทำต่อไหม?")) return;
+    if (c.translation && c.edited && !confirm("ตอนนี้มีการแก้คำแปลเอง แปลใหม่จะทับของเดิม ทำต่อไหม? (AI จำสิ่งที่คุณแก้ไว้ใช้ตอนแปลใหม่)")) return;
+    if (c.edited) learnFromChapter(c, { quiet: true });
     runQueue([el.dataset.id]);
   },
   "delete-chapter": (el) => {
@@ -1135,7 +1207,10 @@ const actions = {
   next: () => step(1),
   "toggle-edit": () => {
     state.editing = !state.editing;
-    if (!state.editing) recheckChapter(state.project, currentChapter());
+    if (!state.editing) {
+      recheckChapter(state.project, currentChapter());
+      learnFromChapter(currentChapter());
+    }
     save();
     render();
   },
@@ -1169,6 +1244,18 @@ const actions = {
   },
   "approve-all": () => {
     state.project.glossary.forEach((e) => (e.status = "locked"));
+    save();
+    render();
+  },
+  "del-rule": (el) => {
+    const mem = memoryOf(state.project);
+    mem.rules = mem.rules.filter((r) => r.id !== el.dataset.id);
+    save();
+    render();
+  },
+  "clear-examples": () => {
+    if (!confirm("ล้างตัวอย่างที่ AI จำไว้ทั้งหมด? (กฎและอภิธานศัพท์ยังอยู่)")) return;
+    memoryOf(state.project).examples = [];
     save();
     render();
   },

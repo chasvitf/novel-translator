@@ -193,3 +193,7 @@ mark.miss { background: var(--accent-soft); outline: 1px solid var(--accent); }
   #chapterSel { min-width: 0; flex: 1 1 140px; }
   th, td { padding: 6px 4px; }
 }
+
+.rules { margin: 0; padding-left: 1.4em; }
+.rules li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.rules li:last-child { border-bottom: 0; }

@@ -140,7 +140,7 @@ test("a single short paragraph is re-translated on its own, not the whole chunk"
   };
   await translateChapter(p, ch, { call });
   assert.equal(sent.length, 2);
-  assert.equal(sent[1], "第三段，天色漸漸暗了下來，風也大了。", "only the short paragraph is sent again");
+  assert.equal(sent[1], "[1] 第三段，天色漸漸暗了下來，風也大了。", "only the short paragraph is sent again");
   assert.ok(ch.translation.endsWith("ลมก็พัดแรงขึ้นเรื่อยๆ"));
   assert.ok(ch.issues.ok);
 });
