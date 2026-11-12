@@ -107,7 +107,8 @@ export async function translateChunk(project, src, previous, summary, call, sign
     const join = (k) => parts.map((x) => x[k]).join("\n\n");
     const issues = mergeIssues(parts.map((x) => x.issues));
     const review = parts.some((x) => x.review) ? mergeReviews(parts.map((x) => x.review)) : undefined;
-    return { src, draft: join("draft"), out: join("out"), issues, model: parts[0].model, ...(review ? { review } : {}) };
+    const proof = parts.some((x) => x.proof) ? { model: parts.map((x) => x.proof?.model).filter(Boolean)[0] || "", applied: parts.flatMap((x) => x.proof?.applied || []), skipped: parts.reduce((n, x) => n + (x.proof?.skipped || 0), 0) } : undefined;
+    return { src, draft: join("draft"), out: join("out"), issues, model: parts[0].model, ...(review ? { review } : {}), ...(proof ? { proof } : {}) };
   }
 }
 
@@ -128,6 +129,10 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
     out = P.alignedReply((await call({ system: P.polishSystem(project), user: P.polishUser({ chunk: src, draft: out, entries, examples }), signal })).text, src, project.tgtLang);
   }
   let issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
+  // Proofreading first: its small edits also fix most name misses, which otherwise cost a full rewrite
+  // of the chunk each round below.
+  let proof;
+  if (proofOn(project)) ({ out, issues, proof } = await proofChunk(project, src, out, entries, summary, call, signal, onStep));
   // Up to 3 fix rounds while each one still helps (a list of ten names can take more than one).
   for (let round = 0; score(issues) && project.autoFix && round < 3; round++) {
     onStep?.("fix", issues);
@@ -148,7 +153,102 @@ async function translateOne(project, src, previous, summary, call, signal, onSte
   if (project.autoFix && issues.structure.length) ({ out, issues } = await repairStructure(project, src, out, entries, summary, previous, call, signal, onStep));
   let review;
   if (project.review) ({ out, issues, review } = await reviewChunk(project, src, out, entries, summary, reviewCall, call, signal, onStep));
-  return { src, draft, out, issues, model: first.model, ...(review ? { review } : {}) };
+  return { src, draft, out, issues, model: first.model, ...(review ? { review } : {}), ...(proof ? { proof } : {}) };
+}
+
+// Thai syllables doubled without ๆ (ความมืดเยือนเยือน, บีบเค้นเค้น, สลัวสลัว in real Gemini output) are
+// almost always slips; they go to the proofreader as hints, which keeps the real ones.
+export function thaiSuspects(text, tgtLang) {
+  if (tgtLang !== "th") return [];
+  const found = new Set();
+  const t = String(text);
+  // Overlapping search (lookahead): a doubled unit must start a syllable (not on a vowel or tone mark) and
+  // end before one, otherwise ปวดรวดร้าว would count as "วดร" twice.
+  for (const m of t.matchAll(/(?=(([\u0E01-\u0E4E]{3,6})\2))/gu)) {
+    const end = m.index + m[1].length;
+    if (/^[\u0E30-\u0E3A\u0E45-\u0E4E]/.test(m[2]) || /[\u0E30-\u0E3A\u0E45-\u0E4E]/.test(t[end] || "") || /[\u0E40-\u0E44]/.test(t[m.index - 1] || "")) continue;
+    found.add(m[1]);
+  }
+  return [...found].slice(0, 15);
+}
+
+// Levenshtein distance over the longer string's length (0 = same, 1 = nothing in common).
+export function editRatio(a, b) {
+  const x = [...a], y = [...b];
+  let prev = Array.from({ length: y.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= x.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= y.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[y.length] / Math.max(1, x.length, y.length);
+}
+
+export const proofOn = (project) => project.proof !== false;
+
+// Apply proofreader edits that can be verified: the quoted text must occur exactly once in its paragraph
+// (or, failing that, once in the whole passage), the change must stay small, and the result may not add
+// name, script or paragraph problems. Returns the new text and what was applied.
+export function applyEdits(project, src, out, entries, edits) {
+  const outPs = paras(out);
+  const applied = [];
+  const skipped = [];
+  const count = (hay, needle) => hay.split(needle).length - 1;
+  for (const e of Array.isArray(edits) ? edits : []) {
+    const find = String(e?.find ?? "");
+    const replace = String(e?.replace ?? "");
+    const n = Number(e?.p);
+    if (!find.trim() || find === replace || replace.length > find.length * 3 + 120 || (replace.length < find.length * 0.3 && find.length > 20)) {
+      skipped.push(e);
+      continue;
+    }
+    let i = Number.isInteger(n) && n >= 1 && n <= outPs.length && count(outPs[n - 1], find) === 1 ? n - 1 : -1;
+    if (i < 0) {
+      const holders = outPs.map((p, k) => (count(p, find) ? k : -1)).filter((k) => k >= 0);
+      if (holders.length === 1 && count(outPs[holders[0]], find) === 1) i = holders[0];
+    }
+    if (i < 0) {
+      skipped.push(e);
+      continue;
+    }
+    const before = checkTranslation(src, outPs.join("\n\n"), entries, project.srcLang, project.tgtLang);
+    const next = outPs.map((p, k) => (k === i ? p.replace(find, () => replace) : p));
+    const after = checkTranslation(src, next.join("\n\n"), entries, project.srcLang, project.tgtLang);
+    // Real proofreading slips: a name edit that left "ยันต์ยันต์", and a "typo" fix that swapped a garbled
+    // word for an unrelated one (สะบثสะบะ → สะเทินน้ำสะเทินบก). A typo fix must stay close to the original.
+    const doubled = thaiSuspects(next[i], project.tgtLang).some((w) => !thaiSuspects(outPs[i], project.tgtLang).includes(w));
+    const farTypo = e.why === "typo" && !find.includes(replace) && !replace.includes(find) && editRatio(find, replace) > 0.45;
+    if (doubled || farTypo || score(after) > score(before) || after.leftovers.some((t) => !before.leftovers.includes(t)) || after.structure.length > before.structure.length) {
+      skipped.push(e);
+      continue;
+    }
+    outPs[i] = next[i];
+    applied.push({ p: i + 1, find, replace, why: String(e.why || "") });
+  }
+  return { out: outPs.join("\n\n"), applied, skipped: skipped.length };
+}
+
+async function proofChunk(project, src, out, entries, summary, call, signal, onStep) {
+  const issues = checkTranslation(src, out, entries, project.srcLang, project.tgtLang);
+  const problems = [
+    ...issues.missing.map((m) => `the source term "${m.entry.source}" must be written "${m.entry.target}"`),
+    ...issues.leftovers.map((t) => `"${t}" is foreign text left in the translation`),
+    ...thaiSuspects(out, project.tgtLang).map((w) => `"${w}" looks like a word written twice by mistake (check it; leave it if it is correct)`),
+  ];
+  const proof = { model: "", applied: [], skipped: 0 };
+  try {
+    onStep?.("proof");
+    const r = await call({ system: P.proofSystem(project), user: P.proofUser({ src: paras(src), out: paras(out), entries, problems }), json: true, signal });
+    proof.model = r.model || "";
+    const res = applyEdits(project, src, out, entries, P.parseJSON(r.text).edits);
+    out = res.out;
+    proof.applied = res.applied;
+    proof.skipped = res.skipped;
+  } catch (e) {
+    if (e.name === "AbortError" || e.kind === "auth" || e.kind === "quota") throw e;
+    proof.error = e.message;
+  }
+  return { out, issues: checkTranslation(src, out, entries, project.srcLang, project.tgtLang), proof };
 }
 
 const paras = (s) => String(s).split(/\n\s*\n|\n/).map((p) => p.trim()).filter(Boolean);
@@ -372,7 +472,8 @@ export async function translateChapter(project, chapter, { call, reviewCall = ca
       onProgress({ step: "analyze" });
       try {
         const a = await analyzeChapterWithTimeout(project, chapter, call, signal);
-        chapter.titleT = a.title || chapter.titleT;
+        // "ตอนที่ 3 …" vs "บทที่ 4 …": keep only the name so every chapter is labelled the same way.
+        chapter.titleT = a.title.replace(/^\s*(?:ตอนที่|บทที่|ตอน|บท|chapter)\s*[\d๐-๙]+\s*[:：.\-–—]?\s*(?=\S)/i, "") || chapter.titleT;
         chapter.summary = a.summary || chapter.summary;
         const added = mergeTerms(project.glossary, a.terms, project.autoTerms === "auto" ? "locked" : "pending", project.tgtLang);
         onProgress({ step: "terms", added });
@@ -400,6 +501,8 @@ export async function translateChapter(project, chapter, { call, reviewCall = ca
     chapter.translation = chunks.map((c) => c.out).join("\n\n");
     chapter.issues = mergeIssues(chunks.map((c) => c.issues));
     chapter.models = [...new Set(chunks.map((c) => c.model).filter(Boolean))];
+    if (proofOn(project)) chapter.proof = { model: [...new Set(chunks.map((c) => c.proof?.model).filter(Boolean))].join(", "), applied: chunks.flatMap((c, k) => (c.proof?.applied || []).map((a) => ({ ...a, chunk: k }))), ...(chunks.find((c) => c.proof?.error) ? { error: chunks.find((c) => c.proof?.error).proof.error } : {}) };
+    else delete chapter.proof;
     if (project.review) chapter.review = mergeReviews(chunks.map((c) => c.review));
     else delete chapter.review;
     chapter.stats = { ...stats, ms: Date.now() - started };

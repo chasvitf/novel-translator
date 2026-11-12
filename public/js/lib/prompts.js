@@ -48,11 +48,30 @@ export function translateSystem(s) {
     "6. Keep pronouns, forms of address and politeness levels consistent with the story context and the notes in the glossary. Where the source leaves something open (who is speaking, a pronoun, a vague phrase), keep it open rather than inventing an explanation.",
     "7. Output only the translated passage: no title, no notes, no explanations, no source text.",
     LANG_NOTES[s.srcLang] ? `8. ${LANG_NOTES[s.srcLang]}` : "",
+    targetRules(s),
     s.custom ? `\nExtra instructions from the translator:\n${s.custom}` : "",
     learnedBlock(s),
   ]
     .filter((x) => x !== "")
     .join("\n");
+}
+
+const PERIOD_GENRES = new Set(["wuxia", "xianxia", "romance-historical"]);
+
+// Fixed choices for the target language, so every chapter makes the same ones (a real 5-chapter run
+// mixed ครับ/ขอรับ, ตอนที่/บทที่ and “ ”/‘ ’ from one chapter to the next).
+export function targetRules(s) {
+  if (s.tgtLang !== "th") return "";
+  const period = PERIOD_GENRES.has(s.genre);
+  return [
+    "Thai house style (the same in every chapter):",
+    period
+      ? "- Pre-modern setting: characters say ข้า/เจ้า/ท่าน; polite endings are ขอรับ (male speaker) and เจ้าค่ะ (female speaker), never ครับ/ค่ะ/คะ. In narration a woman is นาง, a man เขา."
+      : "- Polite endings ครับ (male speaker) and ค่ะ/คะ (female speaker); in narration a woman is เธอ, a man เขา.",
+    "- Spoken dialogue always in “ ”. A character's unspoken thoughts or a word quoted inside narration in ‘ ’, as the source marks them.",
+    "- Correct Thai spelling. Use ๆ for repeated words; never write a word or syllable twice by mistake, never drop a letter, never drop ไม่ or another negation.",
+    "- Forms of address (阿凡-style nicknames, uncle/aunt titles, kinship terms) are fixed per character: once rendered, keep that rendering.",
+  ].join("\n");
 }
 
 // The translator's corrections of similar passages: what the AI wrote and what the person changed it to.
@@ -121,11 +140,12 @@ export function analyzeSystem(s) {
   return [
     `You prepare ${L(s.srcLang)} novel chapters for translation into ${tgt}.`,
     "Return JSON only, with this shape:",
-    `{"title": "<the chapter title translated into ${tgt}, or empty>", "terms": [{"source": "<exact text as it appears in the chapter>", "target": "<${tgt} translation>", "type": "person|place|skill|org|item|title|other", "note": "<short ${tgt} note: gender, role, relationships, how others address them>"}], "summary": "<${tgt} summary of this chapter in at most 120 words: who appears, where, what happens, how the main characters address each other>"}`,
+    `{"title": "<only the name part of the chapter title translated into ${tgt}, without the chapter number or a 第…章 / Chapter label; empty if the title is only a number>", "terms": [{"source": "<exact text as it appears in the chapter>", "target": "<${tgt} translation>", "type": "person|place|skill|org|item|title|other", "note": "<short ${tgt} note: gender, role, relationships, how others address them>"}], "summary": "<${tgt} summary of this chapter in at most 120 words: who appears, where, what happens, how the main characters address each other>"}`,
     "",
     "List at most 40 terms, the most important first.",
     "Terms to list: names of people (also nicknames and titles used as names), places, sects/clans/organizations, martial arts and cultivation techniques, power levels (cultivation realms and their stages, ranks, grades, classes, levels such as 筑基期, 金丹, 斗者, 三星, S級, 레벨), magic items and weapons, and other invented terms that must stay consistent across chapters. List the main character first.",
     "Power levels form a ladder: translate every level of the same ladder the same way, by meaning (never transliterate one level while translating the one below it by meaning), use the same word for 期/境/级/阶/星 each time, and keep the stage words consistent (初期, 中期, 后期, 巅峰 = ขั้นต้น, ขั้นกลาง, ขั้นปลาย, ขั้นสูงสุด in Thai). Give power levels the type \"title\".",
+    "Also list forms of address that recur for a character (nicknames such as 阿凡, uncle/aunt titles such as 一木叔 and 桂凤婶; type \"title\", with a note saying who they refer to) and in-world customs, ceremonies, professions and creatures (such as 束发, 及笄, 符师, 阴鬼; type \"other\"). When you list a compound such as 束发日, also list its base term 束发 so both stay consistent.",
     "Do not list ordinary words. Do not list terms that are already in the KNOWN TERMS list. Use the exact source spelling found in the chapter.",
     `Give exactly one ${tgt} translation per term, written fully in ${tgt} script (no alternatives separated by \"/\", no source characters left inside).`,
     "List each name on its own: split a chain such as 東京開封府汴梁宣武軍 into its separate place names, and list a person apart from the title in front of them unless the title is part of how they are always called.",
@@ -199,6 +219,40 @@ export function reviewUser({ src, out, entries, summary }) {
   return [
     summary ? `STORY SO FAR (context only):\n${summary}` : "",
     glossaryBlock(entries),
+    `SOURCE PARAGRAPHS:\n${numbered(src)}`,
+    `TRANSLATED PARAGRAPHS:\n${numbered(out)}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+// Proofreading: the reviewer returns small find/replace edits instead of a rewritten passage, so the
+// whole chunk is not generated twice (output tokens stay a few hundred) and code can verify every edit.
+export function proofSystem(s) {
+  const tgt = L(s.tgtLang);
+  return [
+    `You are the final proofreader of a ${tgt} translation of a ${L(s.srcLang)} novel. Read every numbered source paragraph next to the translated paragraph of the same number and fix only real errors:`,
+    "- meaning: a word or sentence with a different meaning from the source (wrong object, e.g. water translated as river; wrong person doing the action; lost or added negation; wrong number; wrong kinship term)",
+    "- omission / addition: a phrase the source has and the translation lacks, or one the source does not support",
+    `- typo: a misspelt or garbled ${tgt} word, a missing or extra letter, a syllable or word written twice by mistake, a stray letter from another script`,
+    "- name: a name or term that does not match the GLOSSARY, or is written differently from the rest of the passage",
+    "- consistency: a form of address, pronoun, polite ending or quote mark that breaks the house style below",
+    "Do not change wording that is correct, and do not rewrite for style.",
+    `Every replacement must read as natural, grammatical ${tgt} inside its sentence (no doubled words like "นี่นี้", no leftover fragments): when a fix needs it, replace the whole clause or sentence. If the same mistake occurs several times, give one edit per occurrence.`,
+    targetRules(s),
+    LANG_NOTES[s.srcLang] ? `Notes for this language: ${LANG_NOTES[s.srcLang]}` : "",
+    'Return JSON only: {"edits": [{"p": <paragraph number>, "find": "<text copied exactly from that translated paragraph: the wrong words plus a few neighbouring characters so it occurs only once>", "replace": "<the corrected text>", "why": "meaning|omission|addition|typo|name|consistency"}]}',
+    "For an omission, find = the words just before the gap and replace = those words followed by the missing text.",
+    'Keep each edit short (a phrase, not a whole paragraph). At most 20 edits, the most serious first. If there is nothing to fix, return {"edits": []}.',
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function proofUser({ src, out, entries, problems }) {
+  return [
+    glossaryBlock(entries),
+    problems?.length ? `THE AUTOMATIC CHECK ALSO FOUND (fix these too):\n${problems.map((x) => `- ${x}`).join("\n")}` : "",
     `SOURCE PARAGRAPHS:\n${numbered(src)}`,
     `TRANSLATED PARAGRAPHS:\n${numbered(out)}`,
   ]
@@ -283,7 +337,13 @@ export function parseJSON(reply) {
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("AI ไม่ได้ตอบเป็น JSON");
-  return JSON.parse(s.slice(start, end + 1));
+  const body = s.slice(start, end + 1);
+  try {
+    return JSON.parse(body);
+  } catch (e) {
+    // Models sometimes leave a trailing comma before ] or } (a real gemini-3.5-flash analysis did).
+    try { return JSON.parse(body.replace(/,(\s*[\]}])/g, "$1")); } catch { throw e; }
+  }
 }
 
 // Models sometimes echo the <<< >>> markers or a label; strip them.

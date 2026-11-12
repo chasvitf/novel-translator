@@ -14,7 +14,7 @@ for (const line of fs.readFileSync(path.join(root, ".env"), "utf8").split("\n"))
 }
 const [provider = "gemini", model = "gemini-3.5-flash", ...only] = process.argv.slice(2);
 const key = { gemini: process.env.GEMINI_API_KEY, groq: process.env.GROQ_API_KEY, openrouter: process.env.OPENROUTER_API_KEY }[provider] || "";
-const outDir = path.join(root, "corpus", "out", `${provider}-${model.replace(/[/:]/g, "_")}`);
+const outDir = path.join(root, "corpus", "out", `${provider}-${model.replace(/[/:]/g, "_")}${process.env.TAG ? "-" + process.env.TAG : ""}`);
 fs.mkdirSync(outDir, { recursive: true });
 
 // Books: chapters of one book share a project (and so a glossary) to test consistency across chapters.
@@ -27,6 +27,7 @@ const books = {
   neko: { genre: "classic", files: ["ja-neko-01.txt"] },
   unsu: { genre: "classic", nameStyle: "thai", files: ["ko-unsu.txt"] },
   holmes: { genre: "mystery", files: ["en-holmes-scandal.txt"] },
+  guiyi: { genre: "xianxia", nameStyle: "mandarin", files: ["zh-guiyi-01.txt", "zh-guiyi-02.txt", "zh-guiyi-03.txt", "zh-guiyi-04.txt", "zh-guiyi-05.txt"] },
   tatden: { genre: "classic", files: ["vi-tatden-01.txt"] },
 };
 
@@ -47,7 +48,12 @@ for (const [name, book] of Object.entries(books)) {
   if (only.length && !only.some((o) => name.includes(o) || book.files.some((f) => f.includes(o)))) continue;
   const first = fs.readFileSync(path.join(root, "corpus", book.files[0]), "utf8");
   const project = { name, srcLang: detectLang(first), tgtLang: "th", genre: book.genre, nameStyle: book.nameStyle, custom: "", polish: process.env.POLISH === "1", autoFix: true, autoTerms: "auto", glossary: [], chapters: [] };
-  project.chapters = book.files.map((f) => newChapter(f.replace(".txt", ""), fs.readFileSync(path.join(root, "corpus", f), "utf8")));
+  // A first line like 第3章 小灯符 is the chapter heading: the app splits it off the same way.
+  project.chapters = book.files.map((f) => {
+    const raw = fs.readFileSync(path.join(root, "corpus", f), "utf8");
+    const m = /^(第[\d一二三四五六七八九十百千]+[章回节][^\n]*)\n+/.exec(raw);
+    return newChapter(m ? m[1].trim() : f.replace(".txt", ""), m ? raw.slice(m[0].length) : raw);
+  });
   let todo = project.chapters;
   if (book.continueFrom) {
     const prev = JSON.parse(fs.readFileSync(path.join(root, book.continueFrom), "utf8"));
@@ -61,9 +67,11 @@ for (const [name, book] of Object.entries(books)) {
     const row = { chapter: ch.title, lang: project.srcLang, chars: ch.text.length, chunks: ch.chunks.length, seconds: Math.round((Date.now() - t0) / 1000), glossary: project.glossary.length, missing: final.missing.map((m) => `${m.entry.source}→${m.entry.target}`), leftovers: final.leftovers, draftMisses: ch.chunks.reduce((n, c) => n + checkTranslation(c.src, c.draft, project.glossary, project.srcLang, "th").missing.length, 0) };
     report.push(row);
     console.log(`   ✓ ${row.seconds}s, ${row.chunks} chunks, glossary ${row.glossary}, missing ${row.missing.length}, leftovers ${row.leftovers.length}, draft misses ${row.draftMisses}`);
+    if (ch.proof) console.log(`   proof: ${ch.proof.applied.length} edits${ch.proof.error ? " (error " + ch.proof.error + ")" : ""}`);
     fs.writeFileSync(path.join(outDir, `${ch.title}.th.txt`), `${ch.titleT || ch.title}\n\n${ch.translation}\n`);
   }
   fs.writeFileSync(path.join(outDir, `${name}.project.json`), JSON.stringify(project));
+  fs.writeFileSync(path.join(outDir, `${name}.proof.json`), JSON.stringify(project.chapters.map((c) => ({ title: c.title, proof: c.proof })), null, 1));
   fs.writeFileSync(path.join(outDir, `${name}.glossary.json`), JSON.stringify(project.glossary, null, 1));
   fs.writeFileSync(path.join(outDir, `${name}.summaries.json`), JSON.stringify(project.chapters.map((c) => ({ title: c.titleT, summary: c.summary })), null, 1));
 }

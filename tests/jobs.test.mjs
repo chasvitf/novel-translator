@@ -6,7 +6,7 @@ import { translateChapter, newChapter, runChapters, resetStuck, acceptFix, reche
 import { createCaller, AIError } from "../public/js/lib/providers.js";
 import { checkTranslation, checkStructure, makeEntry, issueCount, mergeTerms } from "../public/js/lib/glossary.js";
 
-const project = (extra = {}) => ({ srcLang: "zh", tgtLang: "th", genre: "xianxia", nameStyle: "", custom: "", polish: false, autoFix: true, autoTerms: "off", glossary: [], chapters: [], ...extra });
+const project = (extra = {}) => ({ srcLang: "zh", tgtLang: "th", genre: "xianxia", nameStyle: "", custom: "", polish: false, proof: false, autoFix: true, autoTerms: "off", glossary: [], chapters: [], ...extra });
 
 // A fake translator: one Thai paragraph per source paragraph, so the structure checks pass.
 const passageOf = (user) => /PASSAGE TO TRANSLATE:\n<<<\n([\s\S]*?)\n>>>/.exec(user)?.[1] ?? "";
@@ -565,4 +565,59 @@ test("a stray letter is patched where it is glued to Thai, not at its first appe
   assert.ok(sent[0].includes("ด้วยiมาด"), "the snippet holds the glued letter");
   assert.ok(r.out.includes("เปี่ยมด้วยมาดองอาจ"));
   assert.ok(r.issues.ok);
+});
+
+// ---------- proofreading (find/replace edits) ----------
+test("proofreading applies exact edits, skips ones that are not in the text, and costs one call", async () => {
+  const p = project({ proof: true, autoFix: false });
+  const ch = newChapter("t", REVIEW_SRC);
+  const asked = [];
+  const call = async (req) => {
+    asked.push(req);
+    if (/PASSAGE TO TRANSLATE/.test(req.user)) return { text: "[1] " + WRONG_OUT.split("\n\n")[0] + "\n\n[2] หลี่ซื่อพยักหนา", model: "m" };
+    return { text: JSON.stringify({ edits: [
+      { p: 1, find: "เมื่อวานพวกเราไปเมืองหลวงมา", replace: "พรุ่งนี้พวกเราจะไปเมืองหลวง", why: "meaning" },
+      { p: 2, find: "พยักหนา", replace: "พยักหน้า", why: "typo" },
+      { p: 2, find: "ไม่มีอยู่จริง", replace: "x", why: "typo" },
+    ] }), model: "m" };
+  };
+  await translateChapter(p, ch, { call });
+  assert.equal(ch.translation, GOOD_OUT);
+  assert.equal(asked.length, 2);
+  assert.match(asked[1].system, /proofreader/);
+  assert.equal(ch.proof.applied.length, 2);
+});
+
+test("a proofreading edit that breaks a locked name is rejected", async () => {
+  const p = project({ proof: true, autoFix: false, glossary: [makeEntry({ source: "王五", target: "หวังอู่", type: "person" }, "locked")] });
+  const ch = newChapter("t", REVIEW_SRC);
+  const call = async (req) => /PASSAGE TO TRANSLATE/.test(req.user)
+    ? { text: GOOD_OUT, model: "m" }
+    : { text: JSON.stringify({ edits: [{ p: 1, find: "หวังอู่หยิบ", replace: "หวางอู่หยิบ", why: "name" }] }), model: "m" };
+  await translateChapter(p, ch, { call });
+  assert.equal(ch.translation, GOOD_OUT);
+  assert.equal(ch.proof.applied.length, 0);
+});
+
+test("a failed proofreading call keeps the translation", async () => {
+  const p = project({ proof: true, autoFix: false });
+  const ch = newChapter("t", REVIEW_SRC);
+  const call = async (req) => { if (/PASSAGE TO TRANSLATE/.test(req.user)) return { text: GOOD_OUT, model: "m" }; return { text: "not json", model: "m" }; };
+  await translateChapter(p, ch, { call });
+  assert.equal(ch.translation, GOOD_OUT);
+  assert.ok(ch.proof.error);
+});
+
+test("proofreading edits that double a word or replace a typo with an unrelated word are rejected", async () => {
+  const { applyEdits, thaiSuspects } = await import("../public/js/lib/pipeline.js");
+  const p = project();
+  const out = "เขาวางยันต์นัยน์ตาสว่างน้อยไว้ แล้วสะบثสะบะเดินไป\n\nความมืดเยือนเยือนแล้ว";
+  const r = applyEdits(p, "他把小灯符放好，然后走了。\n\n天黑了。", out, [], [
+    { p: 1, find: "นัยน์ตาสว่างน้อย", replace: "ยันต์ตะเกียงน้อย", why: "name" },
+    { p: 1, find: "สะบثสะบะเดิน", replace: "สะเทินน้ำสะเทินบกเดิน", why: "typo" },
+    { p: 2, find: "เยือนเยือน", replace: "เยือน", why: "typo" },
+  ]);
+  assert.equal(r.applied.length, 1);
+  assert.equal(r.out.split("\n\n")[1], "ความมืดเยือนแล้ว");
+  assert.deepEqual(thaiSuspects("ปวดรวดร้าว สลัวสลัว", "th"), ["สลัวสลัว"]);
 });

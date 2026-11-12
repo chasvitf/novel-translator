@@ -118,6 +118,7 @@ function blankProject(name, srcLang = "zh") {
     nameStyle: "",
     custom: "",
     polish: false,
+    proof: true,
     autoFix: true,
     autoTerms: "auto",
     chunkSize: 0,
@@ -306,7 +307,7 @@ function issueLines(c) {
 
 function estimateCalls(p, chapters) {
   const size = Number(p.chunkSize) || chunkSizeFor(p.srcLang);
-  return chapters.reduce((n, c) => n + (p.autoTerms !== "off" ? 1 : 0) + chunkText(c.text, size).length * ((p.polish ? 2 : 1) + (p.review ? 1 : 0)), 0);
+  return chapters.reduce((n, c) => n + (p.autoTerms !== "off" ? 1 : 0) + chunkText(c.text, size).length * ((p.polish ? 2 : 1) + (p.proof !== false ? 1 : 0) + (p.review ? 1 : 0)), 0);
 }
 
 function viewChapters() {
@@ -554,7 +555,7 @@ async function fixQueue(chapters) {
 
 function stepText(e) {
   const part = e.total > 1 ? ` ท่อน ${e.chunk + 1}/${e.total}` : "";
-  return { analyze: "หาชื่อและคำเฉพาะใหม่", translate: `แปล${part}`, review: `AI อีกตัวตรวจเทียบต้นฉบับ${part}`, correct: `แก้ย่อหน้าที่ตรวจพบ${part}`, repair: `แปลย่อหน้าที่ไม่ครบใหม่${part}`, polish: `ขัดเกลา${part}`, fix: `แก้คำที่เพี้ยน${part}`, done: "เสร็จ" }[e.step] || e.step;
+  return { analyze: "หาชื่อและคำเฉพาะใหม่", translate: `แปล${part}`, review: `AI อีกตัวตรวจเทียบต้นฉบับ${part}`, proof: `ตรวจทานคำแปล${part}`, correct: `แก้ย่อหน้าที่ตรวจพบ${part}`, repair: `แปลย่อหน้าที่ไม่ครบใหม่${part}`, polish: `ขัดเกลา${part}`, fix: `แก้คำที่เพี้ยน${part}`, done: "เสร็จ" }[e.step] || e.step;
 }
 
 function renderRunner() {
@@ -650,7 +651,7 @@ function viewRead() {
 // Automatic checks only point at likely mistakes; passing them is not proof the translation is right.
 function checkNote(c) {
   const lines = issueLines(c);
-  const by = c.review && !c.review.error ? ` และ AI อีกตัว (${esc(c.review.model || "-")})` : "";
+  const by = (c.proof && !c.proof.error ? ` · AI ตรวจทานแก้ไป ${c.proof.applied?.length || 0} จุด` : "") + (c.review && !c.review.error ? ` และ AI อีกตัว (${esc(c.review.model || "-")})` : "");
   if (!lines.length) return `<p class="small muted">ตรวจอัตโนมัติด้วยโปรแกรม${by}: ไม่พบจุดผิดที่ตรวจได้ · ยังไม่ใช่การตรวจโดยคน</p>`;
   return `<details class="issues small"><summary>ตรวจอัตโนมัติพบ ${lines.length} จุดที่ควรเช็กเทียบต้นฉบับ</summary>${lines.map((l) => `<div>${esc(l)}</div>`).join("")}<div class="muted">ตรวจด้วยโปรแกรม${by} ยังไม่ใช่การตรวจโดยคน</div></details>`;
 }
@@ -921,6 +922,7 @@ function viewSettings() {
   <div class="card">
     <h2>วิธีแปล</h2>
     <label class="check"><input type="checkbox" name="autoFix" ${p.autoFix ? "checked" : ""}><span><b>ตรวจและแก้ชื่อที่เพี้ยนอัตโนมัติ</b><br><span class="small muted">ถ้าเจอชื่อที่แปลไม่ตรงกับที่ระบบจำไว้ ให้ AI แก้เฉพาะจุดนั้น</span></span></label>
+    <label class="check"><input type="checkbox" name="proof" ${p.proof !== false ? "checked" : ""}><span><b>ตรวจทานคำแปลก่อนบันทึก (แนะนำ)</b><br><span class="small muted">AI อ่านเทียบต้นฉบับแล้วแก้เฉพาะคำที่ผิด: ความหมายผิด คำพิมพ์ผิด ชื่อหรือคำเรียกไม่ตรง ใช้เพิ่ม 1 ครั้งต่อท่อน แต่ไม่เขียนทั้งตอนใหม่ จึงใช้ token น้อย</span></span></label>
     <label class="check"><input type="checkbox" name="review" ${p.review ? "checked" : ""}><span><b>ให้ AI อีกตัวตรวจเทียบต้นฉบับ</b><br><span class="small muted">หาประโยคที่แปลผิดความหมาย ตกหล่น เติมเอง หรือสลับคนพูด แล้วแก้เฉพาะย่อหน้านั้น ใช้โควตาเพิ่มอย่างน้อย 1 ครั้งต่อท่อน</span></span></label>
     <label class="check"><input type="checkbox" name="polish" ${p.polish ? "checked" : ""}><span><b>ขัดเกลาอีกรอบ</b><br><span class="small muted">ให้ AI อ่านเทียบต้นฉบับแล้วเกลาสำนวน สวยขึ้นแต่ใช้โควตาเป็น 2 เท่า</span></span></label>
     <div class="grid2" style="margin-top:10px">
@@ -953,6 +955,7 @@ afterRender.settings = () => {
       autoFix: d.has("autoFix"),
       polish: d.has("polish"),
       review: d.has("review"),
+      proof: d.has("proof"),
       autoTerms: d.get("autoTerms"),
       chunkSize: Number(d.get("chunkSize")) === chunkSizeFor(p.srcLang) ? 0 : Number(d.get("chunkSize")),
       custom: d.get("custom").trim(),

@@ -84,7 +84,7 @@ test("reply parsing", () => {
 });
 
 test("pipeline: analyze, translate, check, fix — with a fake model", async () => {
-  const project = { srcLang: "zh", tgtLang: "th", genre: "xianxia", polish: false, autoFix: true, autoTerms: "auto", glossary: [], chapters: [] };
+  const project = { srcLang: "zh", tgtLang: "th", genre: "xianxia", polish: false, proof: false, autoFix: true, autoTerms: "auto", glossary: [], chapters: [] };
   const ch = newChapter("第一回", "孫悟空在花果山。\n\n孫悟空笑了。");
   project.chapters.push(ch);
   const seen = [];
@@ -127,7 +127,7 @@ test("caller moves to the next model when the daily quota is gone", async (t) =>
 });
 
 test("a chunk cut off for length is split in half and retried", async () => {
-  const project = { srcLang: "en", tgtLang: "th", genre: "modern", polish: false, autoFix: false, autoTerms: "off", glossary: [], chapters: [] };
+  const project = { srcLang: "en", tgtLang: "th", genre: "modern", polish: false, proof: false, autoFix: false, autoTerms: "off", glossary: [], chapters: [] };
   const para = "word ".repeat(100).trim();
   const ch = newChapter("c", [para, para, para, para].join("\n\n"));
   ch.summary = "x";

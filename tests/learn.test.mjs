@@ -4,7 +4,7 @@ import { collectCorrections, rememberExamples, relevantExamples, learnFromCorrec
 import { translateChapter, newChapter } from "../public/js/lib/pipeline.js";
 import { makeEntry } from "../public/js/lib/glossary.js";
 
-const project = () => ({ srcLang: "zh", tgtLang: "th", genre: "wuxia", polish: false, autoFix: false, autoTerms: "off", glossary: [], chapters: [] });
+const project = () => ({ srcLang: "zh", tgtLang: "th", genre: "wuxia", polish: false, proof: false, autoFix: false, autoTerms: "off", glossary: [], chapters: [] });
 
 test("corrections: only paragraphs the person changed, and only once", () => {
   const ch = newChapter("一", "郭靖使出降龍十八掌。\n\n他笑了。");
